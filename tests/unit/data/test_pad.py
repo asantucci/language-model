@@ -1,5 +1,3 @@
-# tests/test_pad.py
-
 import torch
 
 from data.data_collator import pad  # adjust path as needed

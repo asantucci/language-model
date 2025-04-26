@@ -147,7 +147,8 @@ class MultiHeadSelfAttention(nn.Module):
 
         # Merge Q
         query_states = torch.cat([q_nope, q_rope], dim=-1)
-        key_states = torch.cat([k_nope, k_rope.expand_as(k_nope)], dim=-1)
+        k_rope = k_rope.expand(-1, self.nheads, -1, -1)  # Expand heads dimension!
+        key_states = torch.cat([k_nope, k_rope], dim=-1)
 
         # Update KV cache if possible, otherwise initialize it from scratch.
         if past_key_value is None and self.config.use_kv_cache:
