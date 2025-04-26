@@ -1,0 +1,11 @@
+[project]
+name = "llm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jax>=0.6.0",
+    "pytest>=8.3.5",
+    "torch>=2.7.0",
+]
