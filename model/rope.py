@@ -26,8 +26,8 @@ class RoPE(nn.Module):
         self.base = base
         self.half = embed_dim // 2
 
-        self.cos_cache = None
-        self.sin_cache = None
+        self.register_buffer('cos_cache', None, persistent=False)
+        self.register_buffer('sin_cache', None, persistent=False)
 
     def _build_cache(self, seq_len: int):
         """
@@ -63,12 +63,13 @@ class RoPE(nn.Module):
         x1, x2 = x[..., :self.half], x[..., self.half:]
         return torch.cat([-x2, x1], dim=-1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, offset: int = 0) -> torch.Tensor:
         """
         Apply rotary positional embeddings to input tensor.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch, heads, seq_len, embed_dim).
+            offset: optional int for pre-existing cache length.
 
         Returns:
             torch.Tensor: Tensor with rotary embeddings applied.
@@ -76,9 +77,9 @@ class RoPE(nn.Module):
         batch, heads, seq_len, emb_dim = x.shape
         assert emb_dim == self.embed_dim, f"Expected last dim {self.embed_dim}, got {emb_dim}"
 
-        self._build_cache(seq_len)
+        self._build_cache(seq_len + offset)
 
-        cos = self.cos_cache[..., :seq_len, :]  # (1, 1, seq_len, embed_dim)
-        sin = self.sin_cache[..., :seq_len, :]
+        cos = self.cos_cache[..., offset:offset+seq_len, :]  # (1, 1, seq_len, embed_dim)
+        sin = self.sin_cache[..., offset:offset+seq_len, :]
 
         return x * cos + self._rotate_half(x) * sin
