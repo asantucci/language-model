@@ -20,6 +20,30 @@ def get_causal_mask(seq_len: int, device: str) -> torch.Tensor:
 class MultiHeadSelfAttention(nn.Module):
     """
     Multi-Head Self Attention layer with support for LoRA, RoPE, KV caching.
+
+    A note on NOPE (Non-Rotary Positional Embedding).
+
+    In the DeepSeek attention architecture, query and key projections are split into two components:
+    - A "ROPE" portion that receives rotary positional encoding (relative position-aware).
+    - A "NOPE" portion that receives no positional encoding (position-agnostic).
+
+    The NOPE subspace allows part of the attention mechanism to focus purely on content-based interactions,
+    independent of token positions. This provides the model with the flexibility to:
+    - Learn relationships where relative or absolute positions are unimportant.
+    - Improve generalization across varying sequence lengths.
+    - Support retrieval-based and factual tasks that depend more on content matching than position.
+
+    Implementation Details:
+    - After linear projections, the head dimension is split into `nope_head_dim` and `rope_head_dim`.
+    - Rotary position embeddings are applied only to the ROPE portion.
+    - The NOPE portion remains unaltered throughout.
+    - The two components are concatenated before computing scaled dot-product attention.
+
+    NOPE complements ROPE by offering a mix of positional and non-positional inductive biases
+    within the same multi-head attention layer. Increasing `nope_head_dim` in the configuration
+    # may improve generalization on tasks where position is less important (e.g. retrieval, factual QA,
+    and document search). In contrast, increasing `rope_head_dim` would favor tasks which have a strong
+    sequential structure (e.g. summarization, or step-by-step reasoning).
     """
 
     def __init__(self, config: DeepSeekConfig, layer_idx: int):
@@ -76,21 +100,31 @@ class MultiHeadSelfAttention(nn.Module):
         past_key_value: Optional[KVCache] = None,
     ):
         """
+        Multi-Head Self-Attention (MHSA) forward pass with support for rotary embeddings, LoRA compression, 
+        and optional key-value (KV) caching for fast autoregressive decoding.
+
         Args:
-            x: input tensor of shape (B, T, d_model)
-            past_key_value: optional KVCache for decoding
+            x (torch.Tensor):
+                Input tensor of shape (B, T, d_model), where
+                - B = batch size
+                - T = input sequence length
+                - d_model = hidden dimension of model
+
+            past_key_value (Optional[KVCache]):
+                Optional pre-computed key and value tensors from previous steps.
+                If provided, enables fast autoregressive inference by avoiding recomputing past keys/values.
+                If None, a fresh cache is created if config.use_kv_cache is True.
+
         Returns:
-            output: tensor of shape (B, T, d_model)
-            updated past_key_value
+            output (torch.Tensor):
+                Output tensor of shape (B, T, d_model) after self-attention and final projection.
+
+            updated_past_key_value (KVCache or None):
+                Updated KVCache containing accumulated keys and values if caching is used.
         """
         B, q_len, _ = x.shape
 
-        # Project Queries
-        if self.q_lora_rank is not None:
-            q = self.q_a_layernorm(self.q_a_proj(x))
-            q = self.q_b_proj(q)
-        else:
-            q = self.q_proj(x)
+        q = self.q_proj(x)  # Applies LoRA if applicable.
         q = q.view(B, q_len, self.nheads, self.q_head_dim).transpose(1, 2)
 
         q_nope, q_rope = torch.split(q, [self.nope_head_dim, self.rope_head_dim], dim=-1)
@@ -128,7 +162,18 @@ class MultiHeadSelfAttention(nn.Module):
         if q_len == kv_seq_len:
             attn_mask = get_causal_mask(seq_len=kv_seq_len, device=x.device)
 
-        # Attention
+        # Attention operation. Note that this can be implemented from scratch as well, but that
+        # torch.functional is going to be more performant as it fuses operations into one GPU kernel launch.
+        # In contrast, the `scaled_dot_product_attention` written from scratch requires a separate GPU kernel launch
+        # for each operation: einsum, matmul, scaling by \sqrt(d), adding mask, softmax, and matmul.
+        # 
+        # def scaled_dot_product_attention(self, Q, K, V, head_dim, mask=None):
+        #     K_T = np.einsum('bhkd -> bhdk', K) / np.sqrt(head_dim)
+        #     logits = np.matmul(Q, K_T)  # bhsd x bhdk --> bhsk (Treats first two dim as batch[es], matmul's the last two dims)
+        #     if mask is not None:
+        #         logits += mask
+        #     attention_weights = self.softmax(logits)
+        #     return np.matmul(attention_weights, V)
         attn_output = F.scaled_dot_product_attention(
             query_states,
             key_states,
