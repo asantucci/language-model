@@ -48,6 +48,10 @@ class KVCache:
             self.key_cache[layer_idx] = torch.cat((past_keys, key_states), dim=-2)
             self.value_cache[layer_idx] = torch.cat((past_values, value_states), dim=-2)
 
+        # Force cache to be on same device as incoming key_states
+        self.key_cache[layer_idx] = self.key_cache[layer_idx].to(key_states.device)
+        self.value_cache[layer_idx] = self.value_cache[layer_idx].to(value_states.device)
+
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
     def get_cache_length(self, layer_idx: int) -> int:

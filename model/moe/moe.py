@@ -42,6 +42,7 @@ class MoE(nn.Module):
         self.topk_norm_epsilon = config.topk_norm_epsilon
         self.normalized_moe_gates = config.normalized_moe_gates
         self.expert_load_balance_factor = config.expert_load_balance_factor
+        self.device = config.device
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._forward_optimized(x)
@@ -78,7 +79,7 @@ class MoE(nn.Module):
         if self.normalized_moe_gates:
             masked_gates = masked_gates / (masked_gates.sum(dim=-1, keepdim=True) + self.topk_norm_epsilon)
 
-        distributor = Distributor(masked_gates, self.topk)
+        distributor = Distributor(masked_gates, self.topk, x.device)
 
         expert_inputs = distributor.prepare_inputs_for_experts(x_flat)
         expert_outputs = [self.experts[i](expert_inputs[i]) for i in range(self.num_routed_experts)]

@@ -15,7 +15,7 @@ def test_distributor_shapes_and_split():
         gates[i, i % num_experts] = 0.6
         gates[i, (i + 1) % num_experts] = 0.4
 
-    distributor = Distributor(gates, topk)
+    distributor = Distributor(gates, topk, 'cpu')
     expert_inputs = distributor.prepare_inputs_for_experts(x)
 
     # Check that we split into the right number of experts
@@ -36,7 +36,7 @@ def test_distributor_combine():
     for i in range(batch_size * seq_len):
         gates[i, i % num_experts] = 1.0
 
-    distributor = Distributor(gates, topk)
+    distributor = Distributor(gates, topk, 'cpu')
     expert_inputs = distributor.prepare_inputs_for_experts(x)
     outputs = [inp + 1 for inp in expert_inputs]
 

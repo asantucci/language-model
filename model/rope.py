@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from typing import Optional
 
 class RoPE(nn.Module):
     """
@@ -26,28 +27,31 @@ class RoPE(nn.Module):
         self.base = base
         self.half = embed_dim // 2
 
+        # Device tracking.
+        self.register_buffer('_rope_device_tracker', torch.empty(0), persistent=False)
+
         self.register_buffer('cos_cache', None, persistent=False)
         self.register_buffer('sin_cache', None, persistent=False)
-
-    def _build_cache(self, seq_len: int):
+    
+    def _build_cache(self, seq_len: int, device: Optional[torch.device] = None):
         """
         Build and cache sin/cos tables for given sequence length.
 
         Args:
             seq_len (int): Sequence length to precompute sin/cos tables for.
+            device (torch.device, optional): device to place the cache on.
         """
         if self.cos_cache is not None and seq_len <= self.cos_cache.shape[-2]:
             return  # Already cached for this or larger seq_len.
 
-        positions = torch.arange(seq_len)
-        frequencies = 1.0 / (self.base ** (torch.arange(0, self.half).float() / self.half))
-        angles = torch.outer(positions, frequencies)  # Shape: (seq_len, embed_dim / 2)
+        positions = torch.arange(seq_len, device=device)
+        frequencies = 1.0 / (self.base ** (torch.arange(0, self.half, device=device).float() / self.half))
+        angles = torch.outer(positions, frequencies)  # (seq_len, embed_dim/2)
 
         cos = torch.cos(angles)
         sin = torch.sin(angles)
 
-        # Duplicate cos/sin across even and odd dimensions
-        self.cos_cache = torch.cat([cos, cos], dim=-1)[None, None, :, :]  # (1, 1, seq_len, embed_dim)
+        self.cos_cache = torch.cat([cos, cos], dim=-1)[None, None, :, :]
         self.sin_cache = torch.cat([sin, sin], dim=-1)[None, None, :, :]
 
     def _rotate_half(self, x: torch.Tensor) -> torch.Tensor:
@@ -77,9 +81,9 @@ class RoPE(nn.Module):
         batch, heads, seq_len, emb_dim = x.shape
         assert emb_dim == self.embed_dim, f"Expected last dim {self.embed_dim}, got {emb_dim}"
 
-        self._build_cache(seq_len + offset)
+        self._build_cache(seq_len + offset, device=x.device)
 
-        cos = self.cos_cache[..., offset:offset+seq_len, :]  # (1, 1, seq_len, embed_dim)
-        sin = self.sin_cache[..., offset:offset+seq_len, :]
+        cos = self.cos_cache[..., offset:offset+seq_len, :].to(x.device)  # (1, 1, seq_len, embed_dim)
+        sin = self.sin_cache[..., offset:offset+seq_len, :].to(x.device)
 
-        return x * cos + self._rotate_half(x) * sin
+        return x * cos + self._rotate_half(x).to(x.device) * sin

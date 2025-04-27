@@ -1,37 +1,20 @@
-# tests/integration/test_train_step.py
-
+import json
 import torch
 import pytest
 from train.shared import get_model, configure_optimizers, configure_scheduler
 from types import SimpleNamespace
+from config.training_args import TrainingArgs
 
-@pytest.fixture
-def dummy_args():
-    return SimpleNamespace(
-        learning_rate=1e-4,
-        adamw_beta1=0.9,
-        adamw_beta2=0.95,
-        adamw_weight_decay=0.01,
-        adamw_use_fused=False,
-        decay_lr=True,
-        scheduler_type="linear",
-        lr_decay_iters=10,
-        min_learning_rate=1e-5,
-        use_eight_bit_optimizer=False,
-        hf_dataset_name="wikitext",
-        hf_dataset_dir="wikitext-2-raw-v1",
-        seq_len=8,
-        batch_size=2,
-        device="cpu",
-    )
-
-def test_single_train_step(dummy_args):
-    model = get_model(device=dummy_args.device, mode="pretrain")
-    optimizer = configure_optimizers(model, dummy_args)
-    scheduler = configure_scheduler(optimizer, dummy_args)
+def test_single_train_step():
+    with open("tests/fixtures/configs/training_args.json", "r") as f:
+        raw_args = json.load(f)
+    training_args = TrainingArgs(**raw_args)
+    model = get_model(mode="pretrain", model_config_path=training_args.model_config_path, device=training_args.device)
+    optimizer = configure_optimizers(model, training_args)
+    scheduler = configure_scheduler(optimizer, training_args)
 
     # Simulate synthetic batch
-    batch_size, seq_len = dummy_args.batch_size, dummy_args.seq_len
+    batch_size, seq_len = training_args.batch_size, training_args.seq_len
     vocab_size = model.config.vocab_size
     inputs = torch.randint(0, vocab_size, (batch_size, seq_len))
     targets = torch.randint(0, vocab_size, (batch_size, seq_len))

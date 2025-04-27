@@ -1,11 +1,23 @@
+import json
 import os
 from types import SimpleNamespace
 import torch
 import tempfile
+from config.training_args import TrainingArgs
 from train.shared import get_model, configure_optimizers
+from tests.conftest import dummy_args
+from typing import Optional
 
-def test_checkpoint_save_load():
-    model = get_model(device="cpu", mode="pretrain")
+import pytest
+import shutil
+import os
+
+def test_checkpoint_save_load(dummy_args):
+    with open("tests/fixtures/configs/training_args.json", "r") as f:
+        raw_args = json.load(f)
+    training_args = TrainingArgs(**raw_args)
+    dummy_args.model_config_path = 'tests/fixtures/configs/pretrain.json'
+    model = get_model(mode="pretrain", model_config_path=dummy_args.model_config_path, device=training_args.device)
     optimizer = configure_optimizers(model, SimpleNamespace(
         learning_rate=1e-4,
         adamw_beta1=0.9,

@@ -10,7 +10,6 @@ def mhsa_config():
         nheads=8,
         max_position_embeddings=512,
         dropout=0.1,
-        device="cpu",
         use_kv_cache=False,
         q_lora_rank=None,
         kv_lora_rank=64,
@@ -34,6 +33,8 @@ def mhsa_config():
         num_layers=4,
         vocab_size=10000,
         init_weight_std=0.02,
+        disable_moe=True,
+        device='cpu'
     )
 
 def test_mhsa_forward_no_kv_cache(mhsa_config):

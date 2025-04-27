@@ -9,7 +9,7 @@ class Distributor:
       - gathers expert outputs
       - combines expert outputs back to the original token order using weighted sums
     """
-    def __init__(self, gates: torch.Tensor, topk: int):
+    def __init__(self, gates: torch.Tensor, topk: int, device: str):
         """
         Initialize the Distributor.
 
@@ -19,13 +19,14 @@ class Distributor:
             topk (int): The number of experts each token is routed to.
         """
         self.topk = topk
+        self.device = device
         batch_and_expert_indices = torch.nonzero(gates)
         sorted_expert_indices, index_sorted = batch_and_expert_indices.sort(dim=0, stable=True)
 
         old_expert_indices = index_sorted[:, 1]
-        self._batch_indices = batch_and_expert_indices[:, 0][old_expert_indices]
+        self._batch_indices = batch_and_expert_indices[:, 0][old_expert_indices].to(self.device)
         self._groups = (gates > 0).sum(dim=0).tolist()
-        self._weights = gates.t().reshape(-1)[gates.t().reshape(-1) > 0].view(-1, 1)
+        self._weights = gates.t().reshape(-1)[gates.t().reshape(-1) > 0].view(-1, 1).to(self.device)
 
     def prepare_inputs_for_experts(self, x: torch.Tensor) -> list[torch.Tensor]:
         """
@@ -115,6 +116,10 @@ class Distributor:
             combined.shape[1],
             dtype=combined.dtype,
             device=combined.device
+        )
+        assert self._batch_indices.max().item() < output.shape[0], (
+            f"batch_indices max {self._batch_indices.max().item()} "
+            f"exceeds output size {output.shape[0]}"
         )
         output.index_add_(0, self._batch_indices, combined)
         return output

@@ -1,3 +1,12 @@
+"""
+Training utilities for DeepSeek-style models.
+
+Design:
+- Single-GPU friendly
+- Mixed-precision supported (via torch.amp.autocast)
+- Lightweight (no distributed training, no DeepSpeed/FSDP)
+"""
+from dataclasses import dataclass
 import json
 import os
 import torch
@@ -10,6 +19,7 @@ from transformers import AutoTokenizer
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, OneCycleLR
 
 from config.deepseek import DeepSeekConfig
+from config.training_args import TrainingArgs
 from model.deepseek import DeepSeekModelForCausalLM
 from data.data_loader import StreamingPretrainBatchDataset
 
@@ -21,7 +31,7 @@ ptdtype = {
 }
 
 
-def get_model(device: str, mode: str) -> DeepSeekModelForCausalLM:
+def get_model(mode: str, model_config_path: Optional[str] = None, device: Optional[str] = None) -> DeepSeekModelForCausalLM:
     """
     Loads DeepSeek model from configuration and moves to specified device.
 
@@ -32,17 +42,26 @@ def get_model(device: str, mode: str) -> DeepSeekModelForCausalLM:
     Returns:
         Instantiated DeepSeekModelForCausalLM on device.
     """
-    config_path = {
-        "sft": "config/sft.json",
-        "pretrain": "config/pretrain.json",
-    }.get(mode)
+    if model_config_path:
+        print(f"We're choosing a config from the configurable args.")
+        model_config = DeepSeekConfig.from_json(model_config_path)
+    else:
+        print(f"We're using a predefined config/*.json file.")
+        config_path = {
+            "sft": "config/sft.json",
+            "pretrain": "config/pretrain.json",
+        }.get(mode)
+        if config_path is None:
+            raise ValueError(f"Unknown mode: {mode}")
+        model_config = DeepSeekConfig.from_json(config_path)
 
-    if config_path is None:
-        raise ValueError(f"Unknown mode: {mode}")
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    model_config.device = device
 
-    config = DeepSeekConfig.from_json(config_path)
-    model = DeepSeekModelForCausalLM(config)
-    model.to(device)
+    model = DeepSeekModelForCausalLM(model_config).to(device)
+    print("Printing device of embed tokens")
+    print(model.model.embed_tokens.weight.device)
 
     total_params, activated_params = model.get_total_parameters()
     print(f"Total parameters: {total_params:,}")
@@ -51,16 +70,22 @@ def get_model(device: str, mode: str) -> DeepSeekModelForCausalLM:
     return model
 
 
+
 def configure_scheduler(optimizer, args) -> Optional[torch.optim.lr_scheduler._LRScheduler]:
     """
-    Configures learning rate scheduler based on args.
+    Configures a learning rate scheduler.
+
+    Supported types:
+      - cosine decay
+      - linear decay
+      - one-cycle policy
 
     Args:
-        optimizer: Torch optimizer instance
-        args: Training arguments namespace
+        optimizer (torch.optim.Optimizer): Optimizer instance.
+        args (Namespace): Training arguments containing scheduler_type, decay settings.
 
     Returns:
-        Scheduler object or None if disabled
+        torch.optim.lr_scheduler._LRScheduler or None: Scheduler object, or None if disabled.
     """
     if not args.decay_lr:
         return None
@@ -87,14 +112,24 @@ def configure_scheduler(optimizer, args) -> Optional[torch.optim.lr_scheduler._L
 
 def configure_optimizers(model, args) -> torch.optim.Optimizer:
     """
-    Groups model parameters and configures optimizer.
+    Configures AdamW optimizer (or AdamW8bit if specified).
+
+    Groups model parameters into two groups:
+      - Parameters with weight decay (e.g., Linear/Conv weights)
+      - Parameters without weight decay (e.g., biases, LayerNorm/Gamma)
+
+    Rationale:
+      - Applying weight decay to biases and LayerNorm scale parameters can hurt model quality.
+      - See discussions in:
+        - "Decoupled Weight Decay Regularization" (Loshchilov & Hutter, 2017) https://arxiv.org/abs/1711.05101
+        - HuggingFace best practices (https://huggingface.co/docs/transformers/main/en/main_classes/optimizer_schedules#transformers.AdamW)
 
     Args:
-        model: Model with parameters
-        args: Training arguments
+        model (nn.Module): Model whose parameters are to be optimized.
+        args (Namespace): Training arguments.
 
     Returns:
-        Configured optimizer.
+        torch.optim.Optimizer: Configured optimizer.
     """
     param_dict = {pn: p for pn, p in model.named_parameters() if p.requires_grad}
     decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
@@ -122,14 +157,14 @@ def configure_optimizers(model, args) -> torch.optim.Optimizer:
 
 def get_dataloader(args, split: str):
     """
-    Creates a streaming dataset loader using HuggingFace datasets.
+    Instantiates a streaming dataset for training or validation.
 
     Args:
-        args: Training arguments
-        split: 'train' or 'validation'
+        args (Namespace): Contains dataset path, block size, batch size, etc.
+        split (str): 'train' or 'validation'.
 
     Returns:
-        StreamingPretrainBatchDataset
+        StreamingPretrainBatchDataset: HuggingFace streaming loader wrapped into batches.
     """
     if not args.hf_dataset_name:
         raise ValueError(f"Unsupported dataset: {args.dataset}")
@@ -150,103 +185,120 @@ def get_dataloader(args, split: str):
     )
 
 
-def load_checkpoint(resume_path: str, device: str):
+def load_checkpoint(resume_path: str, device: str, weights_only: bool = True):
     """
-    Loads model and optimizer states from checkpoint.
+    Loads a saved checkpoint containing model and optimizer state.
 
     Args:
-        resume_path: Path to checkpoint .pt file
-        device: Target device
+        resume_path (str): Path to .pt checkpoint file.
+        device (str): Device for loaded tensors.
 
     Returns:
-        checkpoint dict
+        dict: Checkpoint dictionary.
     """
     if not os.path.isfile(resume_path):
         raise FileNotFoundError(f"Checkpoint file {resume_path} not found.")
-    checkpoint = torch.load(resume_path, map_location=device)
+    checkpoint = torch.load(resume_path, map_location=device, weights_only=weights_only)
     return checkpoint
 
-
-def train_loop(args, mode: str):
+def train_loop(training_args: TrainingArgs, mode: str):
     """
-    Main supervised fine-tuning or pretraining loop.
+    Main loop for either pretraining or supervised fine-tuning.
+
+    Steps:
+      1. Load model, optimizer, scheduler
+      2. Stream batches
+      3. Backpropagate loss (mixed precision if GPU)
+      4. Save checkpoints
+      5. Log metrics to WandB
+      6. Periodic evaluation (optional)
 
     Args:
-        args: Training arguments
-        mode: 'pretrain' or 'sft'
+        training_args (Namespace): Training configuration from argparse.
+        mode (str): 'pretrain' or 'sft'
     """
-    ctx = nullcontext() if args.device == "cpu" else torch.amp.autocast(device_type=args.device, dtype=ptdtype[args.dtype])
+    ctx = nullcontext() if training_args.device == "cpu" else torch.amp.autocast(device_type=training_args.device, dtype=ptdtype[training_args.dtype])
 
-    if args.wandb_log:
-        wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
+    if training_args.wandb_log:
+        wandb.init(project=training_args.wandb_project, name=training_args.wandb_run_name, config=vars(training_args))
 
-    model = get_model(args.device, mode)
-    optimizer = configure_optimizers(model, args)
-    scheduler = configure_scheduler(optimizer, args)
+    model = get_model(mode, training_args.model_config_path, training_args.device)
+    optimizer = configure_optimizers(model, training_args)
+    scheduler = configure_scheduler(optimizer, training_args)
     optimizer.zero_grad(set_to_none=True)
 
-    train_loader = get_dataloader(args, split="train")
-    val_loader = get_dataloader(args, split="validation") if mode == "sft" else None
+    train_loader = get_dataloader(training_args, split="train")
+    val_loader = get_dataloader(training_args, split="validation") if mode == "sft" else None
 
     train_iter = iter(train_loader)
     val_iter = iter(val_loader) if val_loader else None
 
     iter_num = 0
 
-    if args.resume:
-        checkpoint = load_checkpoint(args.resume, args.device)
+    if training_args.resume:
+        checkpoint = load_checkpoint(training_args.resume, training_args.device)
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         iter_num = checkpoint.get("iter_num", 0)
 
-    while iter_num < args.max_train_steps:
+    while iter_num < training_args.max_train_steps:
         past_key_val = None
         optimizer.zero_grad(set_to_none=True)
 
-        for _ in range(args.gradient_accumulation_steps):
+        for _ in range(training_args.gradient_accumulation_steps):
             batch = next(train_iter)
-            x, y = batch["input_ids"].to(args.device), batch["labels"].to(args.device)
+            x, y = batch["input_ids"].to(training_args.device), batch["labels"].to(training_args.device)
 
             with ctx:
                 _, loss, past_key_val = model(x, y, past_key_value=past_key_val)
 
-            (loss / args.gradient_accumulation_steps).backward()
+            (loss / training_args.gradient_accumulation_steps).backward()
 
-        if args.grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            # Detach past key values from the gradient graph (if we didn't do this, calling .backward() would result in a reference
+            # to previous computation graphs).
+            if past_key_val is not None:
+                for layer_idx in range(len(past_key_val.key_cache)):
+                    if past_key_val.key_cache[layer_idx] is not None:
+                        past_key_val.key_cache[layer_idx] = past_key_val.key_cache[layer_idx].detach()
+                    if past_key_val.value_cache[layer_idx] is not None:
+                        past_key_val.value_cache[layer_idx] = past_key_val.value_cache[layer_idx].detach()
+        
+        if training_args.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), training_args.grad_clip)
 
         optimizer.step()
         if scheduler is not None:
             scheduler.step()
 
-        if (iter_num + 1) % args.log_interval == 0 and args.wandb_log:
+        if (iter_num + 1) % training_args.log_interval == 0 and training_args.wandb_log:
             wandb.log({
                 "Step": iter_num,
                 "Train Loss": loss.item(),
                 "Learning Rate": optimizer.param_groups[0]["lr"],
             })
 
-        if (iter_num + 1) % args.save_interval == 0:
-            save_path = os.path.join(args.out_dir, f"{args.checkpoint_path}_step{iter_num + 1}.pt")
-            os.makedirs(args.out_dir, exist_ok=True)
+        if (iter_num + 1) % training_args.save_interval == 0:
+            save_path = os.path.join(training_args.out_dir, f"{training_args.checkpoint_path}_step{iter_num + 1}.pt")
+            os.makedirs(training_args.out_dir, exist_ok=True)
             torch.save({
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "model_config": model.config,
                 "iter_num": iter_num + 1,
-                "training_args": vars(args),
+                "training_args": vars(training_args),
             }, save_path)
 
-        if (iter_num + 1) % args.eval_interval == 0 and val_loader is not None:
+        if (iter_num + 1) % training_args.eval_interval == 0 and val_loader is not None:
             model.eval()
             val_losses = []
-            for _ in range(args.eval_iters):
+            for _ in range(training_args.eval_iters):
                 batch = next(val_iter)
-                x, y = batch["input_ids"].to(args.device), batch["labels"].to(args.device)
+                x, y = batch["input_ids"].to(training_args.device), batch["labels"].to(training_args.device)
                 _, val_loss_tensor, _ = model(x, y)
                 val_losses.append(val_loss_tensor.item())
             avg_val_loss = sum(val_losses) / len(val_losses)
-            wandb.log({"Validation Loss": avg_val_loss})
+            if training_args.wandb_log:
+                wandb.log({"Validation Loss": avg_val_loss})
             model.train()
 
         iter_num += 1

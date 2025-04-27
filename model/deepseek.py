@@ -24,10 +24,10 @@ class TransformerBlock(nn.Module):
         self.input_layernorm = nn.RMSNorm(config.d_model, eps=config.rms_norm_eps)
         self.self_attn = MultiHeadSelfAttention(config, layer_idx=block_idx)
 
-        if block_idx >= config.first_k_dense_replace:
-            self.mlp = MoE(config)
-        else:
+        if block_idx < config.first_k_dense_replace or config.disable_moe:
             self.mlp = FeedForward(config.d_model, config.mlp_hidden_dimension)
+        else:
+            self.mlp = MoE(config)
 
         self.post_attention_layernorm = nn.RMSNorm(config.d_model, eps=config.rms_norm_eps)
 
@@ -60,12 +60,13 @@ class DeepSeekTransformer(nn.Module):
     """
     def __init__(self, config: DeepSeekConfig):
         super().__init__()
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.d_model)
+        self.device = config.device
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.d_model, device=config.device)
         self.dropout = nn.Dropout(config.dropout, inplace=True)
         self.layers = nn.ModuleList(
             [TransformerBlock(config, idx) for idx in range(config.num_layers)]
         )
-        self.final_layernorm = nn.RMSNorm(config.d_model, eps=config.rms_norm_eps)
+        self.final_layernorm = nn.RMSNorm(config.d_model, eps=config.rms_norm_eps, device=config.device)
         self.max_position_embeddings = config.max_position_embeddings
 
     def forward(
@@ -87,7 +88,7 @@ class DeepSeekTransformer(nn.Module):
             f"Input sequence length {T} exceeds model limit {self.max_position_embeddings}"
         )
 
-        x = self.embed_tokens(input_ids)
+        x = self.embed_tokens(input_ids.to(self.device))
         x = self.dropout(x)
 
         for layer in self.layers:
@@ -108,10 +109,12 @@ class DeepSeekModelForCausalLM(nn.Module):
         self.config = config
         self.model = DeepSeekTransformer(config)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self.device = config.device
 
         self.topk = config.topk
         self.init_weight_std = config.init_weight_std
         self.apply(self._init_weights)
+        self.to(self.config.device)
 
     def _init_weights(self, module):
         """
@@ -145,7 +148,7 @@ class DeepSeekModelForCausalLM(nn.Module):
 
         if targets is not None:
             logits = self.lm_head(hidden_states)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)).to(targets.device), targets.view(-1))
         else:
             logits = self.lm_head(hidden_states[:, [-1], :])
             loss = None
@@ -193,6 +196,7 @@ class DeepSeekModelForCausalLM(nn.Module):
             torch.Tensor: (batch_size, seq_len + max_length)
         """
         kv_cache = KVCache(self.config.num_layers)
+        input_ids = input_ids.to(device=self.device)
 
         for _ in range(max_length):
             logits, _, kv_cache = self(input_ids, past_key_value=kv_cache)

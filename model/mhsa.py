@@ -72,7 +72,7 @@ class MultiHeadSelfAttention(nn.Module):
         self.residual_dropout = nn.Dropout(config.dropout)
 
         # Model shape settings
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = config.device
         self.nheads = config.nheads
         self.rope_head_dim = config.rope['head_dim']
         self.nope_head_dim = config.nope_head_dim

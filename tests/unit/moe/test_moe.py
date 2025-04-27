@@ -12,7 +12,6 @@ def moe_config():
         nheads=8,
         max_position_embeddings=4096,
         dropout=0.1,
-        device='cuda' if torch.cuda.is_available() else 'cpu',
         use_kv_cache=False,
         q_lora_rank=128,
         kv_lora_rank=128,
@@ -32,6 +31,7 @@ def moe_config():
         num_layers=4,
         vocab_size=50257,
         init_weight_std=0.006,
+        disable_moe=True,
     )
 
 def test_moe_shapes():
@@ -40,7 +40,6 @@ def test_moe_shapes():
         nheads=2,
         max_position_embeddings=128,
         dropout=0.1,
-        device="cpu",
         use_kv_cache=False,
         q_lora_rank=8,
         kv_lora_rank=8,
@@ -60,6 +59,7 @@ def test_moe_shapes():
         num_layers=2,
         vocab_size=1000,
         init_weight_std=0.006,
+        disable_moe=True
     )
 
     moe = MoE(config)
