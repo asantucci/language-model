@@ -1,4 +1,4 @@
-# llm
+# A Miniature Language Model in <5k lines of code
 ## Minimum Working Example
 In addition to unit + integration testing on mock models, we also provide 
 a `pretrain` command which demonstrates training medium sized model with 500M parameters. After running the [setup](#setup) commands, you're ready to start training a language model! An example of a small pre-training run can be found [here](https://wandb.ai/asantucci-stanford-university/deepseek-pretrain/reports/Pre-training-on-Wikipedia-30k-steps--VmlldzoxMjQ0MTk1Mg).
