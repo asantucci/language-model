@@ -28,6 +28,8 @@
     "min_learning_rate": 0.000001,
     "decay_lr": true,
     "lr_decay_iters": 1,
-    "scheduler_type": "cosine"
-  }
-  
+    "scheduler_type": "cosine",
+    "pretrained_tokenizer_name": "deepseek-ai/deepseek-coder-6.7b-base",
+    "pretrained_tokenizer_max_length": 51200,
+    "generate_interval": 0
+}

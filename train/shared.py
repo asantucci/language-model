@@ -170,8 +170,8 @@ def get_dataloader(args, split: str):
         raise ValueError(f"Unsupported dataset: {args.dataset}")
 
     tokenizer = AutoTokenizer.from_pretrained(
-        "deepseek-ai/deepseek-coder-6.7b-base",
-        model_max_length=1_000_000,
+        args.pretrained_tokenizer_name,
+        model_max_length=args.pretrained_tokenizer_max_length,
         trust_remote_code=True,
     )
 
@@ -200,6 +200,16 @@ def load_checkpoint(resume_path: str, device: str, weights_only: bool = True):
         raise FileNotFoundError(f"Checkpoint file {resume_path} not found.")
     checkpoint = torch.load(resume_path, map_location=device, weights_only=weights_only)
     return checkpoint
+
+def safe_next(loader_iter, loader):
+    try:
+        batch = next(loader_iter)
+        did_wrap = False
+    except StopIteration:
+        loader_iter = iter(loader)
+        batch = next(loader_iter)
+        did_wrap = True
+    return batch, loader_iter, did_wrap
 
 def train_loop(training_args: TrainingArgs, mode: str):
     """
@@ -233,7 +243,14 @@ def train_loop(training_args: TrainingArgs, mode: str):
     train_iter = iter(train_loader)
     val_iter = iter(val_loader) if val_loader else None
 
+    epoch_num = 0
     iter_num = 0
+
+    generation_tokenizer = AutoTokenizer.from_pretrained(
+        training_args.pretrained_tokenizer_name,
+        model_max_length=training_args.pretrained_tokenizer_max_length,
+        trust_remote_code=True,
+    )
 
     if training_args.resume:
         checkpoint = load_checkpoint(training_args.resume, training_args.device)
@@ -245,8 +262,9 @@ def train_loop(training_args: TrainingArgs, mode: str):
         past_key_val = None
         optimizer.zero_grad(set_to_none=True)
 
-        for _ in range(training_args.gradient_accumulation_steps):
-            batch = next(train_iter)
+        for i in range(training_args.gradient_accumulation_steps):
+            batch, train_iter, epoch_increment = safe_next(train_iter, train_loader)
+            epoch_num += epoch_increment
             x, y = batch["input_ids"].to(training_args.device), batch["labels"].to(training_args.device)
 
             with ctx:
@@ -273,6 +291,7 @@ def train_loop(training_args: TrainingArgs, mode: str):
         if (iter_num + 1) % training_args.log_interval == 0 and training_args.wandb_log:
             wandb.log({
                 "Step": iter_num,
+                "Epoch": epoch_num,
                 "Train Loss": loss.item(),
                 "Learning Rate": optimizer.param_groups[0]["lr"],
             })
@@ -292,13 +311,24 @@ def train_loop(training_args: TrainingArgs, mode: str):
             model.eval()
             val_losses = []
             for _ in range(training_args.eval_iters):
-                batch = next(val_iter)
+                batch, val_iter, _ = safe_next(val_iter, val_loader)
                 x, y = batch["input_ids"].to(training_args.device), batch["labels"].to(training_args.device)
                 _, val_loss_tensor, _ = model(x, y)
                 val_losses.append(val_loss_tensor.item())
             avg_val_loss = sum(val_losses) / len(val_losses)
             if training_args.wandb_log:
-                wandb.log({"Validation Loss": avg_val_loss})
+                wandb.log({
+                    "Validation Loss": avg_val_loss,
+                    "Epoch": epoch_num,
+                })
             model.train()
-
+        
+        if training_args.generate_interval > 0 and (iter_num + 1) % training_args.generate_interval == 0:
+            input_ids = generation_tokenizer("the meaning of life is", return_tensors="pt").input_ids.to(training_args.device)
+            with torch.no_grad():
+                output_ids = model.generate(input_ids, max_length=50)
+            decoded = generation_tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            print("\n[Sample Generation @ step", iter_num + 1, "]")
+            print(decoded)
+            print("=" * 80)
         iter_num += 1

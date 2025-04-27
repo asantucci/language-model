@@ -2,3 +2,4 @@
 **/__pycache__/
 llm.egg-info/
 wandb/
+checkpoints/

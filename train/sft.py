@@ -12,6 +12,9 @@ def main():
     parser.add_argument("--seq-len", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
+    parser.add_argument("--model-config-path", type=str, default="config/model_config.json")
+    parser.add_argument("--pretrained-tokenizer-name", type=str, default="deepseek-ai/deepseek-coder-6.7b-base")
+    parser.add_argument("--pretrained_tokenizer_max_length", type=int, default=51_200)
 
     # Optimization parameters
     parser.add_argument("--max-train-steps", type=int, default=30_000)

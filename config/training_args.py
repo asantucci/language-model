@@ -32,4 +32,7 @@ class TrainingArgs:
     decay_lr: bool
     lr_decay_iters: 1
     scheduler_type: str
+    pretrained_tokenizer_name: str
+    pretrained_tokenizer_max_length: str
+    generate_interval: int
     

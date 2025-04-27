@@ -93,7 +93,11 @@ class StreamingPretrainBatchDataset:
         while len(batch_input_ids) < self.batch_size:
             tokens = []
             while len(tokens) < self.block_size + 1:
-                item = next(self.iterator)
+                try:
+                    item = next(self.iterator)
+                except StopIteration:
+                    self.iterator = iter(self.dataset)
+                    item = next(self.iterator)
                 tokens.extend(self.tokenizer(item["text"], return_attention_mask=False)["input_ids"])
 
             tokens = tokens[: self.block_size + 1]
