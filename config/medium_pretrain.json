@@ -1,0 +1,30 @@
+{
+    "d_model": 768,
+    "nheads": 12,
+    "max_position_embeddings": 4096,
+    "dropout": 0.1,
+    "device": "cuda",
+    "use_kv_cache": true,
+    "q_lora_rank": 128,
+    "kv_lora_rank": 512,
+    "nope_head_dim": 128,
+    "rope": {
+        "head_dim": 64,
+        "base": 10000
+    },
+    "v_head_dim": 64,
+    "num_shared_experts": 2,
+    "num_routed_experts": 32,
+    "moe_hidden_dimension": 512,
+    "mlp_hidden_dimension": 2048,
+    "topk": 2,
+    "topk_norm_epsilon": 1e-9,
+    "rms_norm_eps": 1e-6,
+    "normalized_moe_gates": true,
+    "expert_load_balance_factor": 0.01,
+    "num_layers": 12,
+    "vocab_size": 101024,
+    "init_weight_std": 0.02,
+    "first_k_dense_replace": 4,
+    "disable_moe": false
+}
