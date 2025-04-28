@@ -4,7 +4,7 @@
     "max_position_embeddings": 4096,
     "dropout": 0.1,
     "device": "cuda",
-    "use_kv_cache": true,
+    "use_kv_cache": false,
     "q_lora_rank": 128,
     "kv_lora_rank": 512,
     "nope_head_dim": 128,

@@ -35,4 +35,5 @@ class TrainingArgs:
     pretrained_tokenizer_name: str
     pretrained_tokenizer_max_length: str
     generate_interval: int
+    gc: bool
     

@@ -9,7 +9,7 @@
     "kv_lora_rank": 256,
     "nope_head_dim": 64,
     "rope": {
-        "head_dim": 64,
+        "head_dim": 256,
         "base": 10000
     },
     "v_head_dim": 64,

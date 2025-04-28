@@ -7,11 +7,12 @@ Design:
 - Lightweight (no distributed training, no DeepSpeed/FSDP)
 """
 from dataclasses import dataclass
-import json
+import gc
 import os
 import torch
 import wandb
 from contextlib import nullcontext
+import time
 from typing import Optional
 
 import bitsandbytes as bnb
@@ -43,10 +44,8 @@ def get_model(mode: str, model_config_path: Optional[str] = None, device: Option
         Instantiated DeepSeekModelForCausalLM on device.
     """
     if model_config_path:
-        print(f"We're choosing a config from the configurable args.")
         model_config = DeepSeekConfig.from_json(model_config_path)
     else:
-        print(f"We're using a predefined config/*.json file.")
         config_path = {
             "sft": "config/sft.json",
             "pretrain": "config/pretrain.json",
@@ -60,13 +59,12 @@ def get_model(mode: str, model_config_path: Optional[str] = None, device: Option
     model_config.device = device
 
     model = DeepSeekModelForCausalLM(model_config).to(device)
-    print("Printing device of embed tokens")
-    print(model.model.embed_tokens.weight.device)
 
     total_params, activated_params = model.get_total_parameters()
     print(f"Total parameters: {total_params:,}")
     print(f"Activated parameters: {activated_params:,}")
     print(f"Activated ratio: {activated_params / total_params:.2%}")
+    print(f"Model size (GB): {total_params * 2 / (1024**3):.2f} (assuming fp16)")
     return model
 
 
@@ -228,6 +226,10 @@ def train_loop(training_args: TrainingArgs, mode: str):
         mode (str): 'pretrain' or 'sft'
     """
     ctx = nullcontext() if training_args.device == "cpu" else torch.amp.autocast(device_type=training_args.device, dtype=ptdtype[training_args.dtype])
+    if training_args.device == 'cuda':
+        scaler = torch.amp.GradScaler()
+    else:
+        scaler = None
 
     if training_args.wandb_log:
         wandb.init(project=training_args.wandb_project, name=training_args.wandb_run_name, config=vars(training_args))
@@ -266,11 +268,12 @@ def train_loop(training_args: TrainingArgs, mode: str):
             batch, train_iter, epoch_increment = safe_next(train_iter, train_loader)
             epoch_num += epoch_increment
             x, y = batch["input_ids"].to(training_args.device), batch["labels"].to(training_args.device)
-
             with ctx:
                 _, loss, past_key_val = model(x, y, past_key_value=past_key_val)
-
-            (loss / training_args.gradient_accumulation_steps).backward()
+            if scaler is not None:
+                scaler.scale(loss / training_args.gradient_accumulation_steps).backward()
+            else:
+                (loss / training_args.gradient_accumulation_steps).backward()
 
             # Detach past key values from the gradient graph (if we didn't do this, calling .backward() would result in a reference
             # to previous computation graphs).
@@ -284,7 +287,12 @@ def train_loop(training_args: TrainingArgs, mode: str):
         if training_args.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), training_args.grad_clip)
 
-        optimizer.step()
+        if scaler is not None:
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
+
         if scheduler is not None:
             scheduler.step()
 

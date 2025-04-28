@@ -1,14 +1,14 @@
 {
-    "d_model": 128,
-    "nheads": 2,
-    "max_position_embeddings": 512,
+    "d_model": 1024,
+    "nheads": 4,
+    "max_position_embeddings": 4096,
     "dropout": 0.1,
-    "use_kv_cache": true,
+    "use_kv_cache": false,
     "q_lora_rank": 64,
     "kv_lora_rank": 32,
     "nope_head_dim": 16,
     "rope": {
-        "head_dim": 64,
+        "head_dim": 256,
         "base": 10000
     },
     "v_head_dim": 8,
@@ -22,8 +22,8 @@
     "normalized_moe_gates": true,
     "expert_load_balance_factor": 0.01,
     "num_layers": 2,
-    "vocab_size": 1024,
+    "vocab_size": 101024,
     "init_weight_std": 0.006,
     "first_k_dense_replace": 1,
-    "disable_moe": true
+    "disable_moe": false
 }

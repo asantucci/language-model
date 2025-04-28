@@ -1,4 +1,13 @@
 # A Miniature Language Model in <5k lines of code
+> "Modern, modular language model pretraining that is simple enough for a single-GPU researcher, but flexible enough to be a launchpad for custom architectures."
+
+## Comparison with NanoGPT + OLMoE + Llama
+[NanoGPT](https://github.com/karpathy/nanoGPT) hasn't been updated significantly in
+the past several years; during this elapsed time, MoE, RoPE, LoRA, and KV-Caching
+have all become part of modern-stack language models.
+[OLMo](https://github.com/allenai/OLMo) is an open source language model which has many
+overlapping features, however, it does [not](https://github.com/allenai/OLMo/pull/639) have support for MoE. As an entirely separate project, [OLMoE](https://arxiv.org/abs/2409.02060) adds support for mixture of experts, however, the [instructions for pretraining](https://github.com/allenai/OLMoE/tree/main?tab=readme-ov-file#pretraining) are more of a manual recipe than an engineering framework. Perhaps [Llama-models](https://github.com/meta-llama/llama-models) is the closets to our featureset, with the notable difference that Llama is supported by a team of engineers and is going to be more production grade, vs. our Miniature Language Model was created in a weekend by 1 person.
+
 ## Minimum Working Example
 In addition to unit + integration testing on mock models, we also provide 
 a `pretrain` command which demonstrates training medium sized model with 500M parameters. After running the [setup](#setup) commands, you're ready to start training a language model! An example of a small pre-training run can be found [here](https://wandb.ai/asantucci-stanford-university/deepseek-pretrain/reports/Pre-training-on-Wikipedia-30k-steps--VmlldzoxMjQ0MTk1Mg).
@@ -52,7 +61,7 @@ and fragility often associated with large distributed systems.
 ### Tokenizer Agnostic
 We do not implement a Tokenizer from scratch, but instead prefer to keep this as an abstraction. For more explanation, see: [data/README.md](data/README.md)
 
-### Data Abstraction
+### Data Scraping
 We intentionally avoid scraping, curating, or maintaining large-scale internet datasets within this repository.  
 Instead, this project assumes that a dataset can be accessed via a standard Hugging Face dataset loader.
 

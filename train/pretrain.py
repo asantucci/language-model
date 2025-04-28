@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--model-config-path", type=str, default="config/model_config.json")
-    parser.add_argument("--pretrained-tokenizer-name", type=str, default="deepseek-ai/deepseek-coder-6.7b-base")
+    parser.add_argument("--pretrained-tokenizer-name", type=str, default="openai-community/gpt2")
     parser.add_argument("--pretrained_tokenizer_max_length", type=int, default=51_200)
 
     # Optimization parameters
@@ -46,6 +46,9 @@ def main():
 
     # Debugging
     parser.add_argument("--generate-interval", type=int, default=1_000)
+
+    # Memory management / optional garbage collection cycle.
+    parser.add_argument("--gc", type=bool, default=False)
 
     args = parser.parse_args()
     train_loop(args, mode="pretrain")
