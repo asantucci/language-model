@@ -6,7 +6,7 @@
 the past several years; during this elapsed time, MoE, RoPE, LoRA, and KV-Caching
 have all become part of modern-stack language models.
 [OLMo](https://github.com/allenai/OLMo) is an open source language model which has many
-overlapping features, however, it does [not](https://github.com/allenai/OLMo/pull/639) have support for MoE. As an entirely separate project, [OLMoE](https://arxiv.org/abs/2409.02060) adds support for mixture of experts, however, the [instructions for pretraining](https://github.com/allenai/OLMoE/tree/main?tab=readme-ov-file#pretraining) are more of a manual recipe than an engineering framework. Perhaps [Llama-models](https://github.com/meta-llama/llama-models) is the closets to our featureset, with the notable difference that Llama is supported by a team of engineers and is going to be more production grade, vs. our Miniature Language Model was created in a weekend by 1 person.
+overlapping features, however, it does [not](https://github.com/allenai/OLMo/pull/639) have support for MoE. As an entirely separate project, [OLMoE](https://arxiv.org/abs/2409.02060) adds support for mixture of experts, however, the [instructions for pretraining](https://github.com/allenai/OLMoE/tree/main?tab=readme-ov-file#pretraining) are more of a manual recipe than an engineering framework. Perhaps [Llama-models](https://github.com/meta-llama/llama-models) is the closets to our featureset, with the notable difference that Llama is supported by a team of engineers and is going to be more production grade, vs. our Miniature Language Model was created in a weekend by 1 person. 
 
 ## Minimum Working Example
 In addition to unit + integration testing on mock models, we also provide 

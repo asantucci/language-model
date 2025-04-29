@@ -1,0 +1,33 @@
+data:
+  hf-dataset-name: "HuggingFaceH4/ultrachat_200k"
+  hf-dataset-dir: "train_sft"
+
+optim:
+  learning_rate: 5e-5
+  min_learning_rate: 1e-5
+  scheduler_type: "one_cycle"
+  pct_warmup: 0.1
+
+tokenizer:
+  pretrained_tokenizer_name: "openai-community/gpt2"
+  pretrained_tokenizer_max_length: 51200
+
+train:
+  batch_size: 8
+  seq_len: 512
+  max_train_steps: 30000
+  learning_rate: 5e-4
+  min_learning_rate: 5e-5
+  scheduler_type: "cosine"
+  grad_clip: 1.0
+  gradient_accumulation_steps: 8
+  eval_interval: 1000
+  save_interval: 1000
+  log_interval: 10
+  dtype: "bfloat16"
+  device: "cuda"
+
+wandb:
+  log: true
+  project: deepseek-sft
+  run_name: sft_run

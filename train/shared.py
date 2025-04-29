@@ -6,6 +6,7 @@ Design:
 - Mixed-precision supported (via torch.amp.autocast)
 - Lightweight (no distributed training, no DeepSpeed/FSDP)
 """
+from collections import deque
 from dataclasses import dataclass
 import gc
 import os
@@ -14,13 +15,13 @@ import wandb
 from contextlib import nullcontext
 import time
 from typing import Optional
+from omegaconf import OmegaConf
 
 import bitsandbytes as bnb
 from transformers import AutoTokenizer
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, OneCycleLR
 
 from config.deepseek import DeepSeekConfig
-from config.training_args import TrainingArgs
 from model.deepseek import DeepSeekModelForCausalLM
 from data.data_loader import StreamingPretrainBatchDataset
 
@@ -31,43 +32,38 @@ ptdtype = {
     "float16": torch.float16,
 }
 
-
-def get_model(mode: str, model_config_path: Optional[str] = None, device: Optional[str] = None) -> DeepSeekModelForCausalLM:
+def get_model(mode: str, model_cfg: dict, device: Optional[str] = None) -> DeepSeekModelForCausalLM:
     """
-    Loads DeepSeek model from configuration and moves to specified device.
+    Loads DeepSeek model from configuration dictionary and moves to specified device.
 
     Args:
-        device: 'cpu' or 'cuda'
+        model_cfg: dictionary or OmegaConf loaded model configuration.
         mode: 'pretrain' or 'sft'
+        device: 'cpu' or 'cuda'. If None, auto-detect.
 
     Returns:
-        Instantiated DeepSeekModelForCausalLM on device.
+        Instantiated DeepSeekModelForCausalLM on the specified device.
     """
-    if model_config_path:
-        model_config = DeepSeekConfig.from_json(model_config_path)
-    else:
-        config_path = {
-            "sft": "config/sft.json",
-            "pretrain": "config/pretrain.json",
-        }.get(mode)
-        if config_path is None:
-            raise ValueError(f"Unknown mode: {mode}")
-        model_config = DeepSeekConfig.from_json(config_path)
-
+    # Handle device if not specified
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Keeps the relevant fields from the passed configuration dict.
+    model_fields = {k: model_cfg[k] for k in DeepSeekConfig.__dataclass_fields__.keys() if k in model_cfg}
+    # Build DeepSeekConfig from model_cfg dict
+    model_config = DeepSeekConfig(**model_fields)
     model_config.device = device
 
+    # Instantiate model
     model = DeepSeekModelForCausalLM(model_config).to(device)
 
+    # Print model stats
     total_params, activated_params = model.get_total_parameters()
     print(f"Total parameters: {total_params:,}")
     print(f"Activated parameters: {activated_params:,}")
     print(f"Activated ratio: {activated_params / total_params:.2%}")
     print(f"Model size (GB): {total_params * 2 / (1024**3):.2f} (assuming fp16)")
+
     return model
-
-
 
 def configure_scheduler(optimizer, args) -> Optional[torch.optim.lr_scheduler._LRScheduler]:
     """
@@ -85,9 +81,6 @@ def configure_scheduler(optimizer, args) -> Optional[torch.optim.lr_scheduler._L
     Returns:
         torch.optim.lr_scheduler._LRScheduler or None: Scheduler object, or None if disabled.
     """
-    if not args.decay_lr:
-        return None
-
     if args.scheduler_type == "cosine":
         return CosineAnnealingLR(optimizer, T_max=args.lr_decay_iters, eta_min=args.min_learning_rate)
     elif args.scheduler_type == "linear":
@@ -209,7 +202,61 @@ def safe_next(loader_iter, loader):
         did_wrap = True
     return batch, loader_iter, did_wrap
 
-def train_loop(training_args: TrainingArgs, mode: str):
+class TrainingLossMonitor:
+    """
+    Monitors recent training losses to detect divergence or stagnation in pretraining.
+
+    Early-stops training if:
+      - Loss rises consistently across several logging intervals
+      - Loss stays flat within a small delta across several intervals
+
+    Attributes:
+        patience (int): Number of logging intervals to wait before checking early stop.
+        flat_tolerance (float): Maximum absolute change to consider loss "flat."
+        min_steps_before_check (int): Minimum number of total steps before checking early stopping.
+    """
+
+    def __init__(self, patience=4, flat_tolerance=0.001, min_steps_before_check=1000):
+        self.patience = patience
+        self.flat_tolerance = flat_tolerance
+        self.min_steps_before_check = min_steps_before_check
+        self.loss_history = deque(maxlen=patience)
+        self.step_history = deque(maxlen=patience)
+
+    def update(self, loss: float, step: int):
+        """
+        Updates the internal state with new training loss at a given step.
+
+        Args:
+            loss (float): Training loss at current step.
+            step (int): Current training step.
+        """
+        self.loss_history.append(loss)
+        self.step_history.append(step)
+
+    def should_stop(self) -> bool:
+        """
+        Determines whether early stopping should be triggered based on recent losses.
+
+        Returns:
+            bool: True if training should be stopped early, False otherwise.
+        """
+        if len(self.loss_history) < self.patience:
+            return False  # Not enough history yet
+
+        if self.step_history[-1] < self.min_steps_before_check:
+            return False  # Don't check before enough steps
+
+        deltas = [self.loss_history[i] - self.loss_history[i-1] for i in range(1, len(self.loss_history))]
+        num_rising = sum(d > 0 for d in deltas)
+        num_flat = sum(abs(d) < self.flat_tolerance for d in deltas)
+
+        if num_rising >= self.patience - 1 or num_flat >= self.patience - 1:
+            return True
+
+        return False
+
+def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMonitor] = None):
     """
     Main loop for either pretraining or supervised fine-tuning.
 
@@ -224,23 +271,24 @@ def train_loop(training_args: TrainingArgs, mode: str):
     Args:
         training_args (Namespace): Training configuration from argparse.
         mode (str): 'pretrain' or 'sft'
+        loss_monitor (Optional[TrainingLossMonitor]): Monitor for early stopping, if provided.
     """
-    ctx = nullcontext() if training_args.device == "cpu" else torch.amp.autocast(device_type=training_args.device, dtype=ptdtype[training_args.dtype])
-    if training_args.device == 'cuda':
-        scaler = torch.amp.GradScaler()
+    ctx = nullcontext() if cfg.device == "cpu" else torch.amp.autocast(device_type=cfg.device, dtype=ptdtype[cfg.dtype])
+    if cfg.device == 'cuda':
+        scaler = torch.amp.GradScaler()  # <-- This is the constructor that depends on GPU config.
     else:
         scaler = None
 
-    if training_args.wandb_log:
-        wandb.init(project=training_args.wandb_project, name=training_args.wandb_run_name, config=vars(training_args))
+    if cfg.wandb_log:
+        wandb.init(project=cfg.wandb_project, name=cfg.wandb_run_name, config=vars(cfg), reinit="finish_previous")
 
-    model = get_model(mode, training_args.model_config_path, training_args.device)
-    optimizer = configure_optimizers(model, training_args)
-    scheduler = configure_scheduler(optimizer, training_args)
+    model = get_model(mode, cfg, cfg.device)
+    optimizer = configure_optimizers(model, cfg)
+    scheduler = configure_scheduler(optimizer, cfg)
     optimizer.zero_grad(set_to_none=True)
 
-    train_loader = get_dataloader(training_args, split="train")
-    val_loader = get_dataloader(training_args, split="validation") if mode == "sft" else None
+    train_loader = get_dataloader(cfg, split="train")
+    val_loader = get_dataloader(cfg, split="validation") if mode == "sft" else None
 
     train_iter = iter(train_loader)
     val_iter = iter(val_loader) if val_loader else None
@@ -249,31 +297,31 @@ def train_loop(training_args: TrainingArgs, mode: str):
     iter_num = 0
 
     generation_tokenizer = AutoTokenizer.from_pretrained(
-        training_args.pretrained_tokenizer_name,
-        model_max_length=training_args.pretrained_tokenizer_max_length,
+        cfg.pretrained_tokenizer_name,
+        model_max_length=cfg.pretrained_tokenizer_max_length,
         trust_remote_code=True,
     )
 
-    if training_args.resume:
-        checkpoint = load_checkpoint(training_args.resume, training_args.device)
+    if cfg.resume:
+        checkpoint = load_checkpoint(cfg.resume, cfg.device)
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         iter_num = checkpoint.get("iter_num", 0)
 
-    while iter_num < training_args.max_train_steps:
+    while iter_num < cfg.max_train_steps:
         past_key_val = None
         optimizer.zero_grad(set_to_none=True)
 
-        for i in range(training_args.gradient_accumulation_steps):
+        for i in range(cfg.gradient_accumulation_steps):
             batch, train_iter, epoch_increment = safe_next(train_iter, train_loader)
             epoch_num += epoch_increment
-            x, y = batch["input_ids"].to(training_args.device), batch["labels"].to(training_args.device)
+            x, y = batch["input_ids"].to(cfg.device), batch["labels"].to(cfg.device)
             with ctx:
                 _, loss, past_key_val = model(x, y, past_key_value=past_key_val)
             if scaler is not None:
-                scaler.scale(loss / training_args.gradient_accumulation_steps).backward()
+                scaler.scale(loss / cfg.gradient_accumulation_steps).backward()
             else:
-                (loss / training_args.gradient_accumulation_steps).backward()
+                (loss / cfg.gradient_accumulation_steps).backward()
 
             # Detach past key values from the gradient graph (if we didn't do this, calling .backward() would result in a reference
             # to previous computation graphs).
@@ -284,8 +332,8 @@ def train_loop(training_args: TrainingArgs, mode: str):
                     if past_key_val.value_cache[layer_idx] is not None:
                         past_key_val.value_cache[layer_idx] = past_key_val.value_cache[layer_idx].detach()
         
-        if training_args.grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), training_args.grad_clip)
+        if cfg.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
 
         if scaler is not None:
             scaler.step(optimizer)
@@ -296,43 +344,49 @@ def train_loop(training_args: TrainingArgs, mode: str):
         if scheduler is not None:
             scheduler.step()
 
-        if (iter_num + 1) % training_args.log_interval == 0 and training_args.wandb_log:
+        if (iter_num + 1) % cfg.log_interval == 0 and cfg.wandb_log:
             wandb.log({
                 "Step": iter_num,
                 "Epoch": epoch_num,
                 "Train Loss": loss.item(),
                 "Learning Rate": optimizer.param_groups[0]["lr"],
             })
+            if loss_monitor is not None:
+                loss_monitor.update(loss.item(), iter_num + 1)
 
-        if (iter_num + 1) % training_args.save_interval == 0:
-            save_path = os.path.join(training_args.out_dir, f"{training_args.checkpoint_path}_step{iter_num + 1}.pt")
-            os.makedirs(training_args.out_dir, exist_ok=True)
+                if loss_monitor.should_stop():
+                    print(f"⚠️ Early stopping sweep run at step {iter_num+1} due to bad training dynamics.")
+                    break
+
+        if (iter_num + 1) % cfg.save_interval == 0:
+            save_path = os.path.join(cfg.out_dir, f"{cfg.checkpoint_path}_step{iter_num + 1}.pt")
+            os.makedirs(cfg.out_dir, exist_ok=True)
             torch.save({
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "model_config": model.config,
                 "iter_num": iter_num + 1,
-                "training_args": vars(training_args),
+                "training_args": vars(cfg),
             }, save_path)
 
-        if (iter_num + 1) % training_args.eval_interval == 0 and val_loader is not None:
+        if (iter_num + 1) % cfg.eval_interval == 0 and val_loader is not None:
             model.eval()
             val_losses = []
-            for _ in range(training_args.eval_iters):
+            for _ in range(cfg.eval_iters):
                 batch, val_iter, _ = safe_next(val_iter, val_loader)
-                x, y = batch["input_ids"].to(training_args.device), batch["labels"].to(training_args.device)
+                x, y = batch["input_ids"].to(cfg.device), batch["labels"].to(cfg.device)
                 _, val_loss_tensor, _ = model(x, y)
                 val_losses.append(val_loss_tensor.item())
             avg_val_loss = sum(val_losses) / len(val_losses)
-            if training_args.wandb_log:
+            if cfg.wandb_log:
                 wandb.log({
                     "Validation Loss": avg_val_loss,
                     "Epoch": epoch_num,
                 })
             model.train()
         
-        if training_args.generate_interval > 0 and (iter_num + 1) % training_args.generate_interval == 0:
-            input_ids = generation_tokenizer("the meaning of life is", return_tensors="pt").input_ids.to(training_args.device)
+        if cfg.generate_interval > 0 and (iter_num + 1) % cfg.generate_interval == 0:
+            input_ids = generation_tokenizer("the meaning of life is", return_tensors="pt").input_ids.to(cfg.device)
             with torch.no_grad():
                 output_ids = model.generate(input_ids, max_length=50)
             decoded = generation_tokenizer.decode(output_ids[0], skip_special_tokens=True)

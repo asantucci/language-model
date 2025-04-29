@@ -31,6 +31,7 @@ class TrainingArgs:
     min_learning_rate: float
     decay_lr: bool
     lr_decay_iters: 1
+    pct_warmup: float
     scheduler_type: str
     pretrained_tokenizer_name: str
     pretrained_tokenizer_max_length: str
