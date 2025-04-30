@@ -7,7 +7,7 @@ uv run python3 experiments/sweeps/sweep_resample_focused.py \
     --max-train-steps=30000 \
     --early-stopping=true \
     --patience=3 \
-    --flat-tolerance=0.05 \
+    --relative-flat-tolerance=0.01 \
     --min-steps-before-check=1000
 """
 import numpy as np
@@ -57,7 +57,7 @@ def main():
     parser.add_argument("--max-train-steps", type=int, help="# of training steps to execute for each trial.")
     parser.add_argument("--early-stopping", type=bool, help="Whether to use a TrainingLossMonitor to consider an Early Stopping heuristic.")
     parser.add_argument("--patience", type=int, help="# of logged steps to consider using TrainingLossMonitor.")
-    parser.add_argument("--flat-tolerance", type=float, help="The absolute tolerance in adjacent log-steps to be considered 'no progress'.")
+    parser.add_argument("--relative-flat-tolerance", type=float, help="The absolute tolerance in adjacent log-steps to be considered 'no progress'.")
     parser.add_argument("--min-steps-before-check", type=int, help="Minimum # of training steps to execute before considering Early Stopping.")
     args = parser.parse_args()
 
@@ -101,7 +101,7 @@ def main():
             if args.early_stopping:
                 monitor = TrainingLossMonitor(
                     patience=args.patience,
-                    flat_tolerance=args.flat_tolerance,
+                    relative_flat_tolerance=args.relative_flat_tolerance,
                     min_steps_before_check=args.min_steps_before_check,
                 )
             else:

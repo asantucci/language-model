@@ -212,13 +212,13 @@ class TrainingLossMonitor:
 
     Attributes:
         patience (int): Number of logging intervals to wait before checking early stop.
-        flat_tolerance (float): Maximum absolute change to consider loss "flat."
+        relative_flat_tolerance (float): Relative change to consider loss "flat." Defaults to 0.5%.
         min_steps_before_check (int): Minimum number of total steps before checking early stopping.
     """
 
-    def __init__(self, patience=4, flat_tolerance=0.001, min_steps_before_check=1000):
+    def __init__(self, patience=4, relative_flat_tolerance=0.005, min_steps_before_check=1000):
         self.patience = patience
-        self.flat_tolerance = flat_tolerance
+        self.relative_flat_tolerance = relative_flat_tolerance
         self.min_steps_before_check = min_steps_before_check
         self.loss_history = deque(maxlen=patience)
         self.step_history = deque(maxlen=patience)
@@ -249,9 +249,14 @@ class TrainingLossMonitor:
 
         deltas = [self.loss_history[i] - self.loss_history[i-1] for i in range(1, len(self.loss_history))]
         num_rising = sum(d > 0 for d in deltas)
-        num_flat = sum(abs(d) < self.flat_tolerance for d in deltas)
+        relative_deltas = [
+            abs((self.loss_history[i] - self.loss_history[i-1]) / max(self.loss_history[i-1], 1e-6))
+            for i in range(1, len(self.loss_history))
+        ]
 
-        if num_rising >= self.patience - 1 or num_flat >= self.patience - 1:
+        num_flat_pct = sum(delta < self.relative_flat_tolerance for delta in relative_deltas)
+
+        if num_rising >= self.patience - 1 or num_flat_pct >= self.patience - 1:
             return True
 
         return False

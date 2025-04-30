@@ -56,7 +56,7 @@ def main():
             min_steps_before_check=1000,
         )
 
-        print(f"Launching sweep run: {final_cfg.wandb_run_name}")
+        print(f"🚀 Launching sweep run: {final_cfg.wandb_run_name}")
         train_loop(final_cfg, mode="pretrain", loss_monitor=monitor)
 
 if __name__ == "__main__":
