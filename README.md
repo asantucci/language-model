@@ -12,26 +12,10 @@ overlapping features, however, it does [not](https://github.com/allenai/OLMo/pul
 In addition to unit + integration testing on mock models, we also provide 
 a `pretrain` command which demonstrates training medium sized model with 500M parameters. After running the [setup](#setup) commands, you're ready to start training a language model! An example of a small pre-training run can be found [here](https://wandb.ai/asantucci-stanford-university/deepseek-pretrain/reports/Pre-training-on-Wikipedia-30k-steps--VmlldzoxMjQ0MTk1Mg).
 ```
-uv run python3 train/pretrain.py  \
-  --hf-dataset-name='roneneldan/TinyStories' \
-  --hf-dataset-dir=default \
-  --batch-size=8 \
-  --seq-len=512 \
-  --learning-rate=2e-4 \
-  --out-dir=checkpoints/pretrain_medium \
-  --wandb-run-name="pretrain_medium" \
-  --model-config-path=config/medium_pretrain.json \
-  --max-train-steps=10000 \
-  --save-interval=1000 \
-  --log-interval=50 \
-  --grad-clip=1 \
-  --gradient-accumulation-steps=1 \
-  --generate-interval=1000 \
-  --dtype=bfloat16
+uv run python3 train/pretrain.py  --model-config=config/model/medium.yaml --train-config=config/train/base_pretrain.yaml
 ```
 
-More interesting training experiments would involve choosing a larger dataset via argument `hf-dataset-[name|dir]` as well as specifying a larger model architecture
-via the config file pointed to by `model-config-path`.
+More interesting training experiments would involve choosing a larger dataset via argument `hf-dataset-[name|dir]` within the `data` dictionary for `base_pretrain.yaml` as well as specifying a larger model architecture within the `model` dictionary for `medium.yaml`.
 
 ## Why Build a Language Module with Exposed Internals?
 Building a training module with fully exposed internals offers a rare and valuable opportunity to deeply understand and optimize
