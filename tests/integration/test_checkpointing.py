@@ -1,4 +1,5 @@
 import json
+from omegaconf import OmegaConf
 import os
 from types import SimpleNamespace
 import torch
@@ -13,19 +14,24 @@ import shutil
 import os
 
 def test_checkpoint_save_load(dummy_args):
-    with open("tests/fixtures/configs/training_args.json", "r") as f:
-        raw_args = json.load(f)
-    training_args = TrainingArgs(**raw_args)
-    dummy_args.model_config_path = 'tests/fixtures/configs/pretrain.json'
-    model = get_model(mode="pretrain", model_config_path=dummy_args.model_config_path, device=training_args.device)
-    optimizer = configure_optimizers(model, SimpleNamespace(
-        learning_rate=1e-4,
-        adamw_beta1=0.9,
-        adamw_beta2=0.95,
-        adamw_weight_decay=0.01,
-        adamw_use_fused=False,
-        use_eight_bit_optimizer=False,
-    ))
+    train_cfg = OmegaConf.load("tests/fixtures/configs/train.yaml")
+    model_cfg = OmegaConf.load("tests/fixtures/configs/pretrain.yaml")
+    cfg = OmegaConf.merge(
+        model_cfg.kv_cache,
+        model_cfg.misc,
+        model_cfg.model,
+        model_cfg.moe,
+        {"rope": model_cfg.rope},
+        train_cfg.checkpoint,
+        train_cfg.data,
+        train_cfg.optim,
+        train_cfg.tokenizer,
+        train_cfg.train,
+        train_cfg.wandb,
+    )
+
+    model = get_model(mode="pretrain", model_cfg=cfg, device="cpu")
+    optimizer = configure_optimizers(model, cfg)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ckpt_path = os.path.join(tmpdir, "ckpt.pt")

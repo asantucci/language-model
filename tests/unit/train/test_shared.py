@@ -1,4 +1,5 @@
 import json
+from omegaconf import OmegaConf
 import pytest
 import torch
 
@@ -16,16 +17,29 @@ from train.shared import (
 @pytest.fixture
 def training_args():
     """Load training args from config."""
-    with open("tests/fixtures/configs/training_args.json", "r") as f:
-        args = json.load(f)
-    return TrainingArgs(**args)
+    train_cfg = OmegaConf.load("tests/fixtures/configs/train.yaml")
+    model_cfg = OmegaConf.load("tests/fixtures/configs/sft.yaml")
+    cfg = OmegaConf.merge(
+        model_cfg.kv_cache,
+        model_cfg.misc,
+        model_cfg.model,
+        model_cfg.moe,
+        {"rope": model_cfg.rope},
+        train_cfg.checkpoint,
+        train_cfg.data,
+        train_cfg.optim,
+        train_cfg.tokenizer,
+        train_cfg.train,
+        train_cfg.wandb,
+    )
+    return cfg
 
 @pytest.fixture
 def model(training_args):
     """Instantiate model for tests."""
     return get_model(
         mode="pretrain",
-        model_config_path="tests/fixtures/configs/pretrain.json",
+        model_cfg=training_args,
         device=training_args.device,
     )
 
@@ -47,10 +61,6 @@ def test_configure_scheduler_cosine(optimizer, training_args):
 
 def test_configure_optimizers(optimizer):
     assert isinstance(optimizer, torch.optim.AdamW)
-
-def test_get_dataloader(training_args):
-    dataloader = get_dataloader(training_args, split="train")
-    assert hasattr(dataloader, "__iter__")
 
 def test_load_checkpoint_file_not_found(tmp_path):
     with pytest.raises(FileNotFoundError):

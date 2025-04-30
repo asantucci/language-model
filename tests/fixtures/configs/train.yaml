@@ -1,0 +1,43 @@
+checkpoint:
+  resume: ""
+  out_dir: "./checkpoints"
+  checkpoint_path: "pretrain_ckpt"
+  save_interval: 1
+
+data:
+  hf_dataset_name: ""
+  hf_dataset_dir: ""
+
+optim:
+  learning_rate: 2e-4
+  min_learning_rate: 5e-5
+  lr_decay_iters: 1
+  scheduler_type: "cosine"
+  pct_warmup: 0.3
+  adamw_beta1: 0.9
+  adamw_beta2: 0.95
+  adamw_weight_decay: 0.1
+  adamw_use_fused: true
+  use_eight_bit_optimizer: true
+  grad_clip: 1.0
+
+tokenizer:
+  pretrained_tokenizer_name: "openai-community/gpt2"
+  pretrained_tokenizer_max_length: 51200
+
+train:
+  batch_size: 8
+  seq_len: 512
+  max_train_steps: 3
+  gradient_accumulation_steps: 1
+  eval_interval: 1
+  eval_iters: 1
+  generate_interval: 0
+  dtype: "bfloat16"
+  device: "cuda"
+
+wandb:
+  wandb_project: tests
+  wandb_run_name: ""
+  wandb_log: true
+  log_interval: 10

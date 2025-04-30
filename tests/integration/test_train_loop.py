@@ -1,15 +1,14 @@
 import json
+from omegaconf import OmegaConf
 import pytest
 import torch
 from types import SimpleNamespace
 from unittest.mock import patch
 from typing import Optional
 
-from config.training_args import TrainingArgs
 from train.shared import get_model, train_loop, load_checkpoint
 
 import pytest
-import shutil
 import os
 
 class MockTinyDataset(torch.utils.data.IterableDataset):
@@ -42,18 +41,30 @@ def mock_get_dataloader(args, split):
 @patch("train.shared.get_dataloader", new=mock_get_dataloader)
 def test_pretrain_loop_runs_and_loss_is_finite():
     """Test that pretraining runs and produces finite loss and saves checkpoint correctly."""
-    with open("tests/fixtures/configs/training_args.json", "r") as f:
-        raw_args = json.load(f)
-    training_args = TrainingArgs(**raw_args)
-    train_loop(training_args, mode="pretrain")
+    train_cfg = OmegaConf.load("tests/fixtures/configs/train.yaml")
+    model_cfg = OmegaConf.load("tests/fixtures/configs/sft.yaml")
+    cfg = OmegaConf.merge(
+        model_cfg.kv_cache,
+        model_cfg.misc,
+        model_cfg.model,
+        model_cfg.moe,
+        {"rope": model_cfg.rope},
+        train_cfg.checkpoint,
+        train_cfg.data,
+        train_cfg.optim,
+        train_cfg.tokenizer,
+        train_cfg.train,
+        train_cfg.wandb,
+    )
+    train_loop(cfg, mode="pretrain")
 
     # 3. Check that checkpoint file exists
-    ckpt_path = os.path.join(training_args.out_dir, f"{training_args.checkpoint_path}_step1.pt")
+    ckpt_path = os.path.join(cfg.out_dir, f"{cfg.checkpoint_path}_step1.pt")
     assert os.path.isfile(ckpt_path), f"Checkpoint not found: {ckpt_path}"
 
     # 4. Load checkpoint and model
-    checkpoint = load_checkpoint(ckpt_path, device=training_args.device, weights_only=False)
-    trained_model = get_model(mode="pretrain", model_config_path=training_args.model_config_path, device=training_args.device)
+    checkpoint = load_checkpoint(ckpt_path, device=cfg.device, weights_only=False)
+    trained_model = get_model(mode="pretrain", model_cfg=cfg, device=cfg.device)
     trained_model.load_state_dict(checkpoint["model"])
 
     # 5. Verify that the model's weights are not trivial
@@ -63,21 +74,33 @@ def test_pretrain_loop_runs_and_loss_is_finite():
 @patch("train.shared.get_dataloader", new=mock_get_dataloader)
 def test_sft_loop_runs_and_loss_is_finite():
     """Test that SFT runs and produces finite loss."""
-    with open("tests/fixtures/configs/training_args.json", "r") as f:
-        raw_args = json.load(f)
-    training_args = TrainingArgs(**raw_args)
-    model = get_model(mode="sft", model_config_path=training_args.model_config_path, device=training_args.device)
+    train_cfg = OmegaConf.load("tests/fixtures/configs/train.yaml")
+    model_cfg = OmegaConf.load("tests/fixtures/configs/sft.yaml")
+    cfg = OmegaConf.merge(
+        model_cfg.kv_cache,
+        model_cfg.misc,
+        model_cfg.model,
+        model_cfg.moe,
+        {"rope": model_cfg.rope},
+        train_cfg.checkpoint,
+        train_cfg.data,
+        train_cfg.optim,
+        train_cfg.tokenizer,
+        train_cfg.train,
+        train_cfg.wandb,
+    )
+    model = get_model(mode="sft", model_cfg=cfg, device=cfg.device)
     initial_weight = model.lm_head.weight.clone().detach()
 
-    train_loop(training_args, mode="sft")
+    train_loop(cfg, mode="sft")
 
     # 3. Check that checkpoint file exists
-    ckpt_path = os.path.join(training_args.out_dir, f"{training_args.checkpoint_path}_step1.pt")
+    ckpt_path = os.path.join(cfg.out_dir, f"{cfg.checkpoint_path}_step1.pt")
     assert os.path.isfile(ckpt_path), f"Checkpoint not found: {ckpt_path}"
 
     # 4. Load checkpoint and model
-    checkpoint = load_checkpoint(ckpt_path, device=training_args.device, weights_only=False)
-    trained_model = get_model(mode="pretrain", model_config_path=training_args.model_config_path, device=training_args.device)
+    checkpoint = load_checkpoint(ckpt_path, device=cfg.device, weights_only=False)
+    trained_model = get_model(mode="pretrain", model_cfg=cfg, device=cfg.device)
     trained_model.load_state_dict(checkpoint["model"])
     
     final_weight = trained_model.lm_head.weight.clone().detach()

@@ -1,4 +1,5 @@
 import json
+from omegaconf import OmegaConf
 import pytest
 import torch
 from types import SimpleNamespace
@@ -48,7 +49,19 @@ def mock_get_dataloader(args, split):
 def test_train_loop_fast(dummy_args, monkeypatch):
     """Integration test for train_loop() with a mocked fast dataloader."""
     monkeypatch.setattr(shared, "get_dataloader", mock_get_dataloader)
-    with open("tests/fixtures/configs/training_args.json", "r") as f:
-        raw_args = json.load(f)
-    training_args = TrainingArgs(**raw_args)
-    shared.train_loop(training_args, mode="pretrain")
+    train_cfg = OmegaConf.load("tests/fixtures/configs/train.yaml")
+    model_cfg = OmegaConf.load("tests/fixtures/configs/sft.yaml")
+    cfg = OmegaConf.merge(
+        model_cfg.kv_cache,
+        model_cfg.misc,
+        model_cfg.model,
+        model_cfg.moe,
+        {"rope": model_cfg.rope},
+        train_cfg.checkpoint,
+        train_cfg.data,
+        train_cfg.optim,
+        train_cfg.tokenizer,
+        train_cfg.train,
+        train_cfg.wandb,
+    )
+    shared.train_loop(cfg, mode="pretrain")
