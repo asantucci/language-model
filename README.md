@@ -15,7 +15,7 @@ a `pretrain` command which demonstrates training medium sized model with 35M par
 uv run python3 minimal-example.py
 ```
 
-More interesting training experiments would involve choosing a larger dataset via argument `hf-dataset-[name|dir]` within the `data` dictionary for `base_pretrain.yaml` as well as specifying a larger model architecture within the `model` dictionary for `medium.yaml`.
+More interesting training experiments would involve choosing a larger dataset via argument `hf-dataset-[name|dir]` within the `data` dictionary for `configs/train/tiny.yaml` as well as specifying a larger model architecture within the `model` dictionary for `configs/model/tiny.yaml`.
 
 ## Why Build a Language Module with Exposed Internals?
 Building a training module with fully exposed internals offers a rare and valuable opportunity to deeply understand and optimize
