@@ -8,11 +8,11 @@ have all become part of modern-stack language models.
 [OLMo](https://github.com/allenai/OLMo) is an open source language model which has many
 overlapping features, however, it does [not](https://github.com/allenai/OLMo/pull/639) have support for MoE. As an entirely separate project, [OLMoE](https://arxiv.org/abs/2409.02060) adds support for mixture of experts, however, the [instructions for pretraining](https://github.com/allenai/OLMoE/tree/main?tab=readme-ov-file#pretraining) are more of a manual recipe than an engineering framework. Perhaps [Llama-models](https://github.com/meta-llama/llama-models) is the closets to our featureset, with the notable difference that Llama is supported by a team of engineers and is going to be more production grade, vs. our Miniature Language Model was created in a weekend by 1 person. 
 
-## Minimum Working Example
+## Minimum Working Example on Real Data
 In addition to unit + integration testing on mock models, we also provide 
-a `pretrain` command which demonstrates training medium sized model with 500M parameters. After running the [setup](#setup) commands, you're ready to start training a language model! An example of a small pre-training run can be found [here](https://wandb.ai/asantucci-stanford-university/deepseek-pretrain/reports/Pre-training-on-Wikipedia-30k-steps--VmlldzoxMjQ0MTk1Mg).
+a `pretrain` command which demonstrates training medium sized model with 35M parameters. After running the [setup](#setup) commands, you're ready to start training a language model! An example of a small pre-training run can be found [here](https://wandb.ai/asantucci-stanford-university/tiny-deepseek-test/runs/6dkgnxc4).
 ```
-uv run python3 train/pretrain.py  --model-config=config/model/medium.yaml --train-config=config/train/base_pretrain.yaml
+uv run python3 minimal-example.py
 ```
 
 More interesting training experiments would involve choosing a larger dataset via argument `hf-dataset-[name|dir]` within the `data` dictionary for `base_pretrain.yaml` as well as specifying a larger model architecture within the `model` dictionary for `medium.yaml`.
