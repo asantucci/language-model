@@ -56,7 +56,6 @@ optim:
   learning_rate: 2e-2
   min_learning_rate: 1e-3
   scheduler_type: "one_cycle"
-  lr_decay_iters: 25000
   pct_warmup: 0.1
   adamw_beta1: 0.9
   adamw_beta2: 0.95
@@ -72,7 +71,7 @@ tokenizer:
 train:
   batch_size: 2
   seq_len: 128
-  max_train_steps: 1000000
+  max_train_steps: 20000
   gradient_accumulation_steps: 4
   eval_interval: 500
   eval_iters: 10

@@ -6,16 +6,16 @@
 the past several years; during this elapsed time, MoE, RoPE, LoRA, and KV-Caching
 have all become part of modern-stack language models.
 [OLMo](https://github.com/allenai/OLMo) is an open source language model which has many
-overlapping features, however, it does [not](https://github.com/allenai/OLMo/pull/639) have support for MoE. As an entirely separate project, [OLMoE](https://arxiv.org/abs/2409.02060) adds support for mixture of experts, however, the [instructions for pretraining](https://github.com/allenai/OLMoE/tree/main?tab=readme-ov-file#pretraining) are more of a manual recipe than an engineering framework. Perhaps [Llama-models](https://github.com/meta-llama/llama-models) is the closets to our featureset, with the notable difference that Llama is supported by a team of engineers and is going to be more production grade, vs. our Miniature Language Model was created in a weekend by 1 person. 
+overlapping features, however, it does [not](https://github.com/allenai/OLMo/pull/639) have support for MoE. As an entirely separate project, [OLMoE](https://arxiv.org/abs/2409.02060) adds support for mixture of experts, however, the [instructions for pretraining](https://github.com/allenai/OLMoE/tree/main?tab=readme-ov-file#pretraining) are more of a manual recipe than an engineering framework. Perhaps [Llama-models](https://github.com/meta-llama/llama-models) is the closest to our featureset, with the notable difference that Llama is supported by a team of engineers, vs. our Miniature Language Model was created largely in a weekend by 1 person. 
 
 ## Minimum Working Example on Real Data
 In addition to unit + integration testing on mock models, we also provide 
-a `pretrain` command which demonstrates training medium sized model with 35M parameters. After running the [setup](#setup) commands, you're ready to start training a language model! An example of a small pre-training run can be found [here](https://wandb.ai/asantucci-stanford-university/tiny-deepseek-test/runs/6dkgnxc4).
+a `pretrain` command which demonstrates training medium sized model with 35M parameters. After running the [setup](#setup) commands, you're ready to start training a language model! An example of a small pre-training run can be found [here](https://wandb.ai/asantucci-stanford-university/tiny-deepseek-test/runs/4ktk4cl1).
 ```
 uv run python3 minimal-example.py
 ```
 
-More interesting training experiments would involve choosing a larger dataset via argument `hf-dataset-[name|dir]` within the `data` dictionary for `configs/train/tiny.yaml` as well as specifying a larger model architecture within the `model` dictionary for `configs/model/tiny.yaml`.
+More interesting training experiments would involve choosing a larger dataset via argument `hf-dataset-[name|dir]` within the `data` dictionary for `configs/train/tiny.yaml` as well as specifying a larger model architecture within the `model` dictionary for `configs/model/tiny.yaml`. A more purpose built `pretrain.py` and `sft.py` can be found within the `train/` subdirectory.
 
 ## Why Build a Language Module with Exposed Internals?
 Building a training module with fully exposed internals offers a rare and valuable opportunity to deeply understand and optimize
