@@ -36,6 +36,10 @@ def mock_get_dataloader(args, split):
             return self
 
         def __next__(self):
+            batch, _ = self.safe_next()
+            return batch
+
+        def safe_next(self):
             vocab_size = 1024
             batch_size = args.batch_size
             seq_len = args.seq_len
@@ -43,7 +47,7 @@ def mock_get_dataloader(args, split):
             input_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
             labels = torch.randint(0, vocab_size, (batch_size, seq_len))
 
-            return {"input_ids": input_ids, "labels": labels}
+            return {"input_ids": input_ids, "labels": labels}, False
     return DummyLoader()
 
 def test_train_loop_fast(dummy_args, monkeypatch):

@@ -1,0 +1,60 @@
+# =============================================================================
+# TinyStories Training Configuration
+# Based on: medium-scale pretraining config for DeepSeek-style transformers
+# Target Dataset: roneneldan/TinyStories (HuggingFace-hosted)
+#
+# Key Modifications:
+# - Shorter context length (seq_len = 256) better matches TinyStories data
+# - Smaller tokenizer max length (2048) prevents over-padding
+# - Increased batch size and shorter warmup for faster convergence
+# - Cosine scheduler preferred over one_cycle for stability on small runs
+# - Evaluation, checkpointing, and generation happen more frequently
+# - 8-bit optimizer disabled (not necessary at small scale)
+# - Lower weight decay to reduce underfitting risk
+# - New wandb project name for better experiment separation
+#
+# Goal: Validate training dynamics and loss descent with a lightweight config
+# =============================================================================
+checkpoint:
+  resume: ""
+  out_dir: "./checkpoints"
+  checkpoint_path: "pretrain_ckpt"
+  save_interval: 5000
+
+data:
+  hf_dataset_name: "roneneldan/TinyStories"
+  hf_dataset_dir: ""
+
+optim:
+  learning_rate: 2e-4
+  min_learning_rate: 1e-5
+  scheduler_type: "cosine"
+  lr_decay_iters: 25000
+  pct_warmup: 0.1
+  adamw_beta1: 0.9
+  adamw_beta2: 0.95
+  adamw_weight_decay: 0.01
+  adamw_use_fused: true
+  use_eight_bit_optimizer: false
+  grad_clip: 1.0
+
+tokenizer:
+  pretrained_tokenizer_name: "openai-community/gpt2"
+  pretrained_tokenizer_max_length: 2048
+
+train:
+  batch_size: 128
+  seq_len: 256
+  max_train_steps: 1000000
+  gradient_accumulation_steps: 1
+  eval_interval: 500
+  eval_iters: 10
+  generate_interval: 500
+  dtype: "bfloat16"
+  device: "cuda"
+
+wandb:
+  wandb_project: tiny-deepseek-test
+  wandb_run_name: pretrain_tiny
+  wandb_log: true
+  log_interval: 10

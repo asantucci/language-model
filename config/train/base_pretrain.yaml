@@ -5,8 +5,8 @@ checkpoint:
   save_interval: 1000
 
 data:
-  hf_dataset_name: "wikipedia"
-  hf_dataset_dir: "20220301.en"
+  hf_dataset_name: "roneneldan/TinyStories"
+  hf_dataset_dir: ""
 
 optim:
   learning_rate: 2e-4
@@ -27,7 +27,7 @@ tokenizer:
 train:
   batch_size: 8
   seq_len: 512
-  max_train_steps: 15000
+  max_train_steps: 000
   gradient_accumulation_steps: 1
   eval_interval: 1000
   eval_iters: 5
@@ -36,7 +36,7 @@ train:
   device: "cuda"
 
 wandb:
-  wandb_project: deepseek_early_sweep
+  wandb_project: deepseek-long-trial
   wandb_run_name: pretrain_medium
   wandb_log: true
   log_interval: 10

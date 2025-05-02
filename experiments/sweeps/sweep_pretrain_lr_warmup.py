@@ -1,7 +1,8 @@
 import numpy as np
 from omegaconf import OmegaConf
+import wandb
 
-from train.shared import TrainingLossMonitor, train_loop
+from train.shared import LinearSlopeBasedEarlyStopper, train_loop
 
 def sample_log_uniform(low, high):
     log_low = np.log(low)
@@ -11,16 +12,17 @@ def sample_log_uniform(low, high):
 def sample_uniform(low, high):
     return np.random.uniform(low, high)
 
-def generate_sweep_points(n=5):
+def generate_sweep_points(n=16):
     points = []
     for _ in range(n):
-        lr = sample_log_uniform(5e-5, 2e-3)
-        warmup = sample_uniform(0.02, 0.3)
+        lr = sample_log_uniform(2e-3, 1e-2)
+        warmup = sample_uniform(0.01, 0.5)
         points.append({
             "learning_rate": float(lr),
             "pct_warmup": float(warmup),
         })
     return points
+
 
 def main():
     train_cfg = OmegaConf.load("config/train/base_pretrain.yaml")
@@ -39,6 +41,7 @@ def main():
         train_cfg.train,
         train_cfg.wandb,
     )
+    base_merged_cfg.max_train_steps = 25_000
 
     for sweep_override in sweep_cfgs:
         # Now apply the sweep overrides (learning_rate + pct_warmup)
@@ -49,15 +52,21 @@ def main():
             f"lr_{sweep_override['learning_rate']}_warmup_{sweep_override['pct_warmup']}"
         )
 
+        final_cfg.wandb_project = "deepseek_sweep"        
+        wandb_logger = wandb.init(project=final_cfg.wandb_project, name=final_cfg.wandb_run_name, config=dict(final_cfg), reinit="finish_previous")
         # Create a monitor for this sweep run
-        monitor = TrainingLossMonitor(
-            patience=10,
-            relative_flat_tolerance=0.1,
+        monitor = LinearSlopeBasedEarlyStopper(
+            window_size=250,
+            slope_history_window=250,
             min_steps_before_check=1000,
+            ema_beta=0.9,
+            slope_mean_threshold=0.001,
+            slope_magnitude_threshold=0.0005,
+            slope_fraction_threshold=0.1,
+            wandb_logger=wandb_logger
         )
-
         print(f"Launching sweep run: {final_cfg.wandb_run_name}")
-        train_loop(final_cfg, mode="pretrain", loss_monitor=monitor)
+        train_loop(final_cfg, mode="pretrain", loss_monitor=monitor, wandb_logger=wandb_logger)
 
 if __name__ == "__main__":
     main()

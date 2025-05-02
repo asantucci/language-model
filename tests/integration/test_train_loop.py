@@ -28,12 +28,17 @@ def mock_get_dataloader(args, split):
     class DummyLoader:
         def __iter__(self):
             return self
-
+    
         def __next__(self):
-            return {
+            batch, _ = self.safe_next()
+            return batch
+    
+        def safe_next(self):
+            batch = {
                 "input_ids": torch.randint(0, vocab_size, (batch_size, seq_len)),
                 "labels": torch.randint(0, vocab_size, (batch_size, seq_len)),
             }
+            return batch, False
 
     return DummyLoader()
 

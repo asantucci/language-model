@@ -1,0 +1,51 @@
+# =============================================================================
+# TinyStories Model Configuration
+# Based on: medium.yaml from DeepSeek-style architecture
+# Target Dataset: roneneldan/TinyStories (short, simple, well-formed texts)
+#
+# Key Modifications:
+# - Reduced model size: d_model=256, 6 layers, 4 heads → ~TinyGPT scale
+# - Smaller max_position_embeddings (512) since TinyStories rarely exceed 200 tokens
+# - No dropout for training stability on small models
+# - Reduced MoE parameters: fewer experts, smaller hidden dims
+# - LoRA rank and head dimensions scaled to match model size
+# - Goal: fast convergence, low memory use, and algorithmic correctness testing
+# =============================================================================
+kv_cache:
+  use_kv_cache: false
+  q_lora_rank: 64
+  kv_lora_rank: 128
+  rope_head_dim: 32
+  nope_head_dim: 64
+  v_head_dim: 32
+  rope_base: 10000
+
+misc:
+  init_weight_std: 0.02
+  rms_norm_eps: 1e-6
+  device: cuda
+
+model:
+  d_model: 256
+  nheads: 4
+  num_layers: 6
+  max_position_embeddings: 512
+  dropout: 0.0
+  vocab_size: 50257
+
+moe:
+  num_shared_experts: 1
+  num_routed_experts: 4
+  moe_hidden_dimension: 128
+  mlp_hidden_dimension: 512
+  topk: 2
+  expert_load_balance_factor: 0.01
+  topk_norm_epsilon: 1e-9
+  normalized_moe_gates: true
+  first_k_dense_replace: 2
+  disable_moe: false
+
+rope:
+  head_dim: 64
+  base: 10000
+  

@@ -12,10 +12,11 @@ uv run python3 experiments/sweeps/sweep_resample_focused.py \
 """
 import numpy as np
 import argparse
+import wandb
 import yaml
 from omegaconf import OmegaConf
 
-from train.shared import TrainingLossMonitor, train_loop
+from train.shared import LinearSlopeBasedEarlyStopper, train_loop
 
 def sample_log_uniform(low, high):
     log_low = np.log(low)
@@ -56,9 +57,6 @@ def main():
     parser.add_argument("--wandb-project", type=str, help="Title of the Project to create in WandB.ai")
     parser.add_argument("--max-train-steps", type=int, help="# of training steps to execute for each trial.")
     parser.add_argument("--early-stopping", type=bool, help="Whether to use a TrainingLossMonitor to consider an Early Stopping heuristic.")
-    parser.add_argument("--patience", type=int, help="# of logged steps to consider using TrainingLossMonitor.")
-    parser.add_argument("--relative-flat-tolerance", type=float, help="The absolute tolerance in adjacent log-steps to be considered 'no progress'.")
-    parser.add_argument("--min-steps-before-check", type=int, help="Minimum # of training steps to execute before considering Early Stopping.")
     args = parser.parse_args()
 
     base_train_cfg = OmegaConf.load("config/train/base_pretrain.yaml")
@@ -95,18 +93,25 @@ def main():
             final_cfg.max_train_steps = args.max_train_steps
             final_cfg.resume = ""
             final_cfg.wandb_run_name = f"focused_sweep{idx}_{sweep_idx}_lr{final_cfg.learning_rate:.1e}_wu{final_cfg.pct_warmup:.2f}"
-            final_cfg.wandb_project = "deepseek_focused_sweep"
+            final_cfg.wandb_project = args.wandb_project
 
             # Create a monitor for this sweep run
+            wandb_logger = wandb.init(project=final_cfg.wandb_project, name=final_cfg.wandb_run_name, config=dict(final_cfg), reinit="finish_previous")
             if args.early_stopping:
-                monitor = TrainingLossMonitor(
-                    patience=args.patience,
-                    relative_flat_tolerance=args.relative_flat_tolerance,
-                    min_steps_before_check=args.min_steps_before_check,
+                monitor = LinearSlopeBasedEarlyStopper(
+                    window_size=250,
+                    slope_history_window=20,
+                    min_steps_before_check=1000,
+                    ema_beta=0.9,
+                    slope_mean_threshold=0.004,
+                    slope_magnitude_threshold=0.002,
+                    slope_fraction_threshold=0.7,
+                    wandb_logger=wandb_logger
                 )
+
             else:
                 monitor = None
-            train_loop(final_cfg, mode="pretrain", loss_monitor=monitor)
+            train_loop(final_cfg, mode="pretrain", loss_monitor=monitor, wandb_logger=wandb_logger)
 
 if __name__ == "__main__":
     main()

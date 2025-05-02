@@ -1,6 +1,7 @@
 import argparse
 from omegaconf import OmegaConf
 from train.shared import train_loop
+import wandb
 
 def main():
     parser = argparse.ArgumentParser()
@@ -23,8 +24,8 @@ def main():
         train_cfg.train,
         train_cfg.wandb,
     )
-
-    train_loop(cfg, mode="pretrain")
+    wandb_run = wandb.init(project=cfg.wandb_project, name=cfg.wandb_run_name, config=dict(cfg), reinit=True)
+    train_loop(cfg, mode="pretrain", wandb_logger=wandb_run)
 
 if __name__ == "__main__":
     main()

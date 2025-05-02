@@ -7,6 +7,7 @@ Design:
 - Lightweight (no distributed training, no DeepSpeed/FSDP)
 """
 from collections import deque
+import numpy as np
 from dataclasses import dataclass
 import gc
 import os
@@ -16,6 +17,7 @@ from contextlib import nullcontext
 import time
 from typing import Optional
 from omegaconf import OmegaConf
+from scipy.stats import linregress
 
 import bitsandbytes as bnb
 from transformers import AutoTokenizer
@@ -192,16 +194,6 @@ def load_checkpoint(resume_path: str, device: str, weights_only: bool = True):
     checkpoint = torch.load(resume_path, map_location=device, weights_only=weights_only)
     return checkpoint
 
-def safe_next(loader_iter, loader):
-    try:
-        batch = next(loader_iter)
-        did_wrap = False
-    except StopIteration:
-        loader_iter = iter(loader)
-        batch = next(loader_iter)
-        did_wrap = True
-    return batch, loader_iter, did_wrap
-
 class TrainingLossMonitor:
     """
     Monitors recent training losses to detect divergence or stagnation in pretraining.
@@ -261,7 +253,76 @@ class TrainingLossMonitor:
 
         return False
 
-def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMonitor] = None):
+class LinearSlopeBasedEarlyStopper:
+    def __init__(self,
+                 window_size=250,
+                 slope_history_window=20,
+                 min_steps_before_check=1000,
+                 ema_beta=0.9,
+                 slope_mean_threshold=0.003,
+                 slope_magnitude_threshold=0.002,
+                 slope_fraction_threshold=0.7,
+                 wandb_logger=None):
+        
+        self.window_size = window_size
+        self.slope_history_window = slope_history_window
+        self.min_steps_before_check = min_steps_before_check
+        self.ema_beta = ema_beta
+
+        self.slope_mean_threshold = slope_mean_threshold
+        self.slope_magnitude_threshold = slope_magnitude_threshold
+        self.slope_fraction_threshold = slope_fraction_threshold
+        self.wandb_logger = wandb_logger
+
+        self.loss_history = deque(maxlen=window_size)
+        self.step_history = deque(maxlen=window_size)
+        self.slope_history = deque(maxlen=slope_history_window)
+
+        self.ema_loss = None
+
+    def update(self, loss: float, step: int):
+        # Smooth loss with EMA
+        if self.ema_loss is None:
+            self.ema_loss = loss
+        else:
+            self.ema_loss = self.ema_beta * self.ema_loss + (1 - self.ema_beta) * loss
+
+        self.loss_history.append(self.ema_loss)
+        self.step_history.append(step)
+
+        if len(self.loss_history) == self.window_size:
+            x = np.array(self.step_history)
+            y = np.array(self.loss_history)
+            slope, *_ = linregress(x, y)
+            self.slope_history.append(slope)
+
+            if self.wandb_logger:
+                self.wandb_logger.log({
+                    "EarlyStopper/Slope": slope,
+                    "EarlyStopper/SlopeMean": np.mean(self.slope_history) if self.slope_history else 0,
+                    "EarlyStopper/FractionAboveMagnitude": np.mean([s > self.slope_magnitude_threshold for s in self.slope_history]) if self.slope_history else 0,
+                    "EarlyStopper/Step": step,
+                })
+
+    def should_stop(self) -> bool:
+        if len(self.loss_history) < self.window_size:
+            return False
+        if self.step_history[-1] < self.min_steps_before_check:
+            return False
+        if len(self.slope_history) < self.slope_history_window:
+            return False
+
+        slope_mean = np.mean(self.slope_history)
+        slope_frac_exceeds = np.mean([s > self.slope_magnitude_threshold for s in self.slope_history])
+
+        if slope_mean > self.slope_mean_threshold and slope_frac_exceeds > self.slope_fraction_threshold:
+            print(f"[EarlyStop] Triggered at step {self.step_history[-1]} | "
+                  f"slope_mean={slope_mean:.5f}, "
+                  f"frac_exceeds={slope_frac_exceeds:.2f}")
+            return True
+        return False
+
+def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMonitor | LinearSlopeBasedEarlyStopper] = None, wandb_logger = None):
     """
     Main loop for either pretraining or supervised fine-tuning.
 
@@ -284,9 +345,6 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
     else:
         scaler = None
 
-    if cfg.wandb_log:
-        wandb.init(project=cfg.wandb_project, name=cfg.wandb_run_name, config=vars(cfg), reinit="finish_previous")
-
     model = get_model(mode, cfg, cfg.device)
     optimizer = configure_optimizers(model, cfg)
     scheduler = configure_scheduler(optimizer, cfg)
@@ -308,7 +366,7 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
     )
 
     if cfg.resume:
-        checkpoint = load_checkpoint(cfg.resume, cfg.device)
+        checkpoint = load_checkpoint(cfg.resume, cfg.device, weights_only=False)
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         iter_num = checkpoint.get("iter_num", 0)
@@ -318,7 +376,7 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
         optimizer.zero_grad(set_to_none=True)
 
         for i in range(cfg.gradient_accumulation_steps):
-            batch, train_iter, epoch_increment = safe_next(train_iter, train_loader)
+            batch, epoch_increment = train_loader.safe_next()
             epoch_num += epoch_increment
             x, y = batch["input_ids"].to(cfg.device), batch["labels"].to(cfg.device)
             with ctx:
@@ -349,8 +407,8 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
         if scheduler is not None:
             scheduler.step()
 
-        if (iter_num + 1) % cfg.log_interval == 0 and cfg.wandb_log:
-            wandb.log({
+        if (iter_num + 1) % cfg.log_interval == 0 and cfg.wandb_log and wandb_logger is not None:
+            wandb_logger.log({
                 "Step": iter_num,
                 "Epoch": epoch_num,
                 "Train Loss": loss.item(),
@@ -360,7 +418,7 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
                 loss_monitor.update(loss.item(), iter_num + 1)
 
                 if loss_monitor.should_stop():
-                    print(f"⚠️ Early stopping sweep run at step {iter_num+1} due to bad training dynamics.")
+                    print(f"Early stopping sweep run at step {iter_num+1} due to bad training dynamics.")
                     break
 
         if (iter_num + 1) % cfg.save_interval == 0:
@@ -378,24 +436,24 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
             model.eval()
             val_losses = []
             for _ in range(cfg.eval_iters):
-                batch, val_iter, _ = safe_next(val_iter, val_loader)
+                batch, _ = val_loader.safe_next()
                 x, y = batch["input_ids"].to(cfg.device), batch["labels"].to(cfg.device)
                 _, val_loss_tensor, _ = model(x, y)
                 val_losses.append(val_loss_tensor.item())
             avg_val_loss = sum(val_losses) / len(val_losses)
-            if cfg.wandb_log:
-                wandb.log({
+            if cfg.wandb_log and wandb_logger is not None:
+                wandb_logger.log({
                     "Validation Loss": avg_val_loss,
                     "Epoch": epoch_num,
                 })
             model.train()
         
-        if cfg.generate_interval > 0 and (iter_num + 1) % cfg.generate_interval == 0:
-            input_ids = generation_tokenizer("the meaning of life is", return_tensors="pt").input_ids.to(cfg.device)
-            with torch.no_grad():
-                output_ids = model.generate(input_ids, max_length=50)
-            decoded = generation_tokenizer.decode(output_ids[0], skip_special_tokens=True)
-            print("\n[Sample Generation @ step", iter_num + 1, "]")
-            print(decoded)
-            print("=" * 80)
+        #if cfg.generate_interval > 0 and (iter_num + 1) % cfg.generate_interval == 0:
+        #    input_ids = generation_tokenizer("the meaning of life is", return_tensors="pt").input_ids.to(cfg.device)
+        #    with torch.no_grad():
+        #        output_ids = model.generate(input_ids, max_length=50)
+        #    decoded = generation_tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        #    print("\n[Sample Generation @ step", iter_num + 1, "]")
+        #    print(decoded)
+        #    print("=" * 80)
         iter_num += 1
