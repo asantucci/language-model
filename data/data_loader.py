@@ -73,40 +73,56 @@ class DataLoader:
 
         return x.to(self.device), y.to(self.device)
 
-
 class StreamingPretrainBatchDataset:
-    def __init__(
-            self, pth: str, tokenizer, block_size: int, batch_size: int, name=None, split="train"
-        ):
+    def __init__(self, pth, tokenizer, block_size, batch_size, name=None, split="train"):
         self.block_size = block_size
         self.batch_size = batch_size
         self.tokenizer = tokenizer
-        self.dataset = load_dataset(pth, name, split=split, streaming=True, trust_remote_code=True)
+        self.pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+        self.dataset = load_dataset(
+            pth, name, split=split, streaming=True, trust_remote_code=True
+        ).shuffle(buffer_size=10000, seed=42)
         self.iterator = iter(self.dataset)
 
-    def __iter__(self):
-        return self
+    def __iter__(self): return self
+
+    def safe_next(self):
+        try:
+            return next(self), False
+        except StopIteration:
+            self.iterator = iter(self.dataset)
+            return next(self), True
 
     def __next__(self):
-        batch_input_ids = []
-        batch_labels = []
-        while len(batch_input_ids) < self.batch_size:
-            tokens = []
-            while len(tokens) < self.block_size + 1:
-                try:
-                    item = next(self.iterator)
-                except StopIteration:
-                    self.iterator = iter(self.dataset)
-                    item = next(self.iterator)
-                tokens.extend(self.tokenizer(item["text"], return_attention_mask=False)["input_ids"])
+        input_ids_list = []
+        labels_list = []
 
+        while len(input_ids_list) < self.batch_size:
+            item = next(self.iterator)
+            text = item.get("text", "")
+            tokens = self.tokenizer(
+                text, return_attention_mask=False, add_special_tokens=False
+            )["input_ids"]
+
+            if len(tokens) < 2:
+                continue
+
+            tokens.append(self.tokenizer.eos_token_id)
             tokens = tokens[: self.block_size + 1]
+
             input_ids = torch.tensor(tokens[:-1], dtype=torch.long)
             labels = torch.tensor(tokens[1:], dtype=torch.long)
 
-            batch_input_ids.append(input_ids)
-            batch_labels.append(labels)
+            # Pad input_ids and labels to full block_size
+            pad_len = self.block_size - len(input_ids)
+            if pad_len > 0:
+                input_ids = torch.cat([input_ids, torch.full((pad_len,), self.pad_token_id)])
+                labels = torch.cat([labels, torch.full((pad_len,), -100)])
 
-        input_ids = torch.stack(batch_input_ids)   # shape: [B, T]
-        labels = torch.stack(batch_labels)         # shape: [B, T]
-        return {"input_ids": input_ids, "labels": labels}
+            input_ids_list.append(input_ids)
+            labels_list.append(labels)
+
+        return {
+            "input_ids": torch.stack(input_ids_list),
+            "labels": torch.stack(labels_list),
+        }

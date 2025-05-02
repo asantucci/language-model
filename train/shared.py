@@ -148,25 +148,20 @@ def configure_optimizers(model, args) -> torch.optim.Optimizer:
         )
 
 
-def get_dataloader(args, split: str):
+def get_dataloader(args, split: str, tokenizer):
     """
     Instantiates a streaming dataset for training or validation.
 
     Args:
         args (Namespace): Contains dataset path, block size, batch size, etc.
         split (str): 'train' or 'validation'.
+        tokenizer: A tokenizer obtained from AutoTokenizer.from_pretrained(), or compatible.
 
     Returns:
         StreamingPretrainBatchDataset: HuggingFace streaming loader wrapped into batches.
     """
     if not args.hf_dataset_name:
         raise ValueError(f"Unsupported dataset: {args.dataset}")
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.pretrained_tokenizer_name,
-        model_max_length=args.pretrained_tokenizer_max_length,
-        trust_remote_code=True,
-    )
 
     return StreamingPretrainBatchDataset(
         pth=args.hf_dataset_name,
@@ -322,6 +317,15 @@ class LinearSlopeBasedEarlyStopper:
             return True
         return False
 
+def batch_entropy(labels, tokenizer):
+    flat = labels.view(-1)
+    flat = flat[flat >= 0]  # mask out -100 and any other negatives
+    probs = torch.bincount(flat, minlength=tokenizer.vocab_size).float()
+    probs = probs[probs > 0]
+    probs /= probs.sum()
+    return -(probs * probs.log2()).sum().item()
+
+
 def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMonitor | LinearSlopeBasedEarlyStopper] = None, wandb_logger = None):
     """
     Main loop for either pretraining or supervised fine-tuning.
@@ -349,12 +353,15 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
     optimizer = configure_optimizers(model, cfg)
     scheduler = configure_scheduler(optimizer, cfg)
     optimizer.zero_grad(set_to_none=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        cfg.pretrained_tokenizer_name,
+        model_max_length=cfg.pretrained_tokenizer_max_length,
+        trust_remote_code=True,
+    )
+    tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    train_loader = get_dataloader(cfg, split="train")
-    val_loader = get_dataloader(cfg, split="validation") if mode == "sft" else None
-
-    train_iter = iter(train_loader)
-    val_iter = iter(val_loader) if val_loader else None
+    train_loader = get_dataloader(cfg, "train", tokenizer)
+    val_loader = get_dataloader(cfg, "validation", tokenizer) if mode == "sft" else None
 
     epoch_num = 0
     iter_num = 0
@@ -375,16 +382,22 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
         past_key_val = None
         optimizer.zero_grad(set_to_none=True)
 
+        entropy = 0
+        preds = []
         for i in range(cfg.gradient_accumulation_steps):
             batch, epoch_increment = train_loader.safe_next()
             epoch_num += epoch_increment
             x, y = batch["input_ids"].to(cfg.device), batch["labels"].to(cfg.device)
+            entropy += batch_entropy(y, tokenizer)
             with ctx:
-                _, loss, past_key_val = model(x, y, past_key_value=past_key_val)
+                logits, loss, past_key_val = model(x, y, past_key_value=past_key_val)
             if scaler is not None:
                 scaler.scale(loss / cfg.gradient_accumulation_steps).backward()
             else:
                 (loss / cfg.gradient_accumulation_steps).backward()
+
+            # For diagnostic purposes, calculate the # of unique predictions per batch.
+            preds.extend(logits.argmax(-1).view(-1).tolist())
 
             # Detach past key values from the gradient graph (if we didn't do this, calling .backward() would result in a reference
             # to previous computation graphs).
@@ -395,6 +408,9 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
                     if past_key_val.value_cache[layer_idx] is not None:
                         past_key_val.value_cache[layer_idx] = past_key_val.value_cache[layer_idx].detach()
         
+        with torch.no_grad():
+            unique_preds = len(torch.unique(torch.tensor(preds, dtype=torch.long)))
+
         if cfg.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
 
@@ -411,6 +427,8 @@ def train_loop(cfg: OmegaConf, mode: str, loss_monitor: Optional[TrainingLossMon
             wandb_logger.log({
                 "Step": iter_num,
                 "Epoch": epoch_num,
+                "Batch Entropy": entropy,
+                "Unique Predictions (in batch)": unique_preds,
                 "Train Loss": loss.item(),
                 "Learning Rate": optimizer.param_groups[0]["lr"],
             })

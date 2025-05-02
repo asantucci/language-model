@@ -26,9 +26,9 @@ data:
   hf_dataset_dir: ""
 
 optim:
-  learning_rate: 2e-4
-  min_learning_rate: 1e-5
-  scheduler_type: "cosine"
+  learning_rate: 2e-2
+  min_learning_rate: 1e-3
+  scheduler_type: "one_cycle"
   lr_decay_iters: 25000
   pct_warmup: 0.1
   adamw_beta1: 0.9
@@ -43,10 +43,10 @@ tokenizer:
   pretrained_tokenizer_max_length: 2048
 
 train:
-  batch_size: 128
-  seq_len: 256
+  batch_size: 2
+  seq_len: 128
   max_train_steps: 1000000
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 4
   eval_interval: 500
   eval_iters: 10
   generate_interval: 500
