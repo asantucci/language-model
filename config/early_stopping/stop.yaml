@@ -1,0 +1,7 @@
+window_size: 250
+slope_history_window: 250
+min_steps_before_check: 100
+ema_beta: 0.9
+slope_mean_threshold: 0.001
+slope_magnitude_threshold: 0.005
+slope_fraction_threshold: 0.1
